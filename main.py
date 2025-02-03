@@ -7,35 +7,31 @@ import cv2
 import matplotlib.pyplot as plt
 from scipy import ndimage
 
-#TODO: Brighten pictures to have maximum brightness (255) in each picture
 def binarize_image(image_path, output_path):
-    # Read image
-    image = io.imread(image_path)
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-    # Enhanced Otsu's method
-    # Apply additional contrast stretching
-    p2, p98 = np.percentile(image, (1.5, 98.5))
-    stretched = exposure.rescale_intensity(image, in_range=(p2, p98))
+    # Apply Contrast Limited Adaptive Histogram Equalization to boost contrast before applying Otsu
+    clahe = cv2.createCLAHE(clipLimit=2, tileGridSize=(8,8)) # Clip limit can be optimized (2-3 is optimal)
+    enhanced = clahe.apply(img)
 
-    # Calculate Otsu's threshold on the stretched image
-    thresh = filters.threshold_otsu(stretched)
-    binary = (stretched > thresh).astype(np.uint8) * 255
+    # Apply Otsu's thresholding
+    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # Post-processing to remove small noise
-    # Remove small objects
+    # Filter out noise
     labeled_array, num_features = ndimage.label(binary)
     component_sizes = np.bincount(labeled_array.ravel())
-    too_small = component_sizes < 50  # Temporary threshold
+    too_small = component_sizes < 50  # Can be optimized to filter out smaller or larger objects
     too_small_mask = too_small[labeled_array]
     binary[too_small_mask] = 0
 
     # Close small gaps
-    kernel = np.ones((3,3), np.uint8) # Temporary fix could be made dynamic
+    kernel = np.ones((5,5), np.uint8)
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
     io.imsave(output_path, binary)
 
     return binary
+
 
 def process_directory(base_path):
     # Create output directory if it doesn't exist
@@ -75,7 +71,6 @@ def setup_extract_features(binarized, data, spam = True):
             binarized_images = glob.glob(os.path.join(binarized_subfolder_path, "*.tiff"))
 
             # Extract features from the binarized images
-            # if spam: print(f"BINARIZED IMAGES: {binarized_images}")
             extract_features(binarized_images, data_subfolder_path, spam)
 
 # TODO: REFACTOR FOR READABILITY
