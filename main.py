@@ -1,29 +1,43 @@
 import os
-from skimage import io, filters, measure
+from skimage import io, filters, measure, exposure, restoration
 import numpy as np
 from pathlib import Path
 import glob
 import cv2
 import matplotlib.pyplot as plt
+from scipy import ndimage
 
-# Optimal threshold found to be .6-.7, further optimization can be done if desired
-THRESHOLD = 0.63 # Coefficient to multiply Otsu's value (Lower value to increase features, raise to decrease noise)
-
-#TODO: create size threshold to filter out super small astrocytes and noise
-def binarize_image(image_path, output_path, threshold):
+#TODO: Brighten pictures to have maximum brightness (255) in each picture
+def binarize_image(image_path, output_path):
+    # Read image
     image = io.imread(image_path)
 
-    # Apply Otsu's thresholding but lower it by multiplying by a factor
-    threshold = filters.threshold_otsu(image) * threshold  # Lowered to desired threshold
-    binary = image > threshold
+    # Enhanced Otsu's method
+    # Apply additional contrast stretching
+    p2, p98 = np.percentile(image, (1.5, 98.5))
+    stretched = exposure.rescale_intensity(image, in_range=(p2, p98))
 
-    # Convert boolean to uint8 with 0 and 255 values
-    binary_image = binary.astype(np.uint8) * 255
+    # Calculate Otsu's threshold on the stretched image
+    thresh = filters.threshold_otsu(stretched)
+    binary = (stretched > thresh).astype(np.uint8) * 255
 
-    # Save the binarized image
-    io.imsave(output_path, binary_image)
+    # Post-processing to remove small noise
+    # Remove small objects
+    labeled_array, num_features = ndimage.label(binary)
+    component_sizes = np.bincount(labeled_array.ravel())
+    too_small = component_sizes < 50  # Temporary threshold
+    too_small_mask = too_small[labeled_array]
+    binary[too_small_mask] = 0
 
-def process_directory(base_path, THRESHOLD):
+    # Close small gaps
+    kernel = np.ones((3,3), np.uint8) # Temporary fix could be made dynamic
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+    io.imsave(output_path, binary)
+
+    return binary
+
+def process_directory(base_path):
     # Create output directory if it doesn't exist
     output_base = "binarized_images"
     if not os.path.exists(output_base):
@@ -44,13 +58,13 @@ def process_directory(base_path, THRESHOLD):
                 output_path = output_dir / file
 
                 # Binarize image
-                binarize_image(str(file_path), str(output_path), THRESHOLD)
+                binarize_image(str(file_path), str(output_path))
                 print(f"Processed: {file}")
 
 def setup_extract_features(binarized, data, spam = True):
     # Spam turns on or off the side by side visualization of the data & it's binarized counterpart
     for subfolder in os.listdir(binarized):
-        inarized_subfolder_path = os.path.join(binarized, subfolder)
+        binarized_subfolder_path = os.path.join(binarized, subfolder)
         data_subfolder_path = os.path.join(data, subfolder)
 
         # Ensure the corresponding subfolder exists in data
@@ -110,7 +124,7 @@ def extract_features(binarized_images, data_subfolder_path, spam):
 if __name__ == "__main__":
     # Binarize images
     base_path = "data"
-    process_directory(base_path, THRESHOLD)
+    process_directory(base_path)
     print("Binarization complete.")
 
     # Extract features from the binarized images
