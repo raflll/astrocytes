@@ -14,8 +14,8 @@ def binarize_image(image_path, output_path):
     clahe = cv2.createCLAHE(clipLimit=2, tileGridSize=(8,8)) # Clip limit can be optimized (2-3 is optimal)
     enhanced = clahe.apply(img)
 
-    # Apply Otsu's thresholding
-    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Apply TRIANGLE threshold
+    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
 
     # Filter out noise
     labeled_array, num_features = ndimage.label(binary)
