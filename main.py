@@ -1,3 +1,4 @@
+import copy
 import os
 from skimage import io, morphology, measure, img_as_ubyte
 import numpy as np
@@ -9,11 +10,12 @@ from scipy import ndimage
 from skan import Skeleton
 
 def binarize_image(image_path, output_path):
+    # TODO: Make SIZE_FILTER dynamic depending on the image? I'm not sure if this is possible or necessary
     SIZE_FILTER = 100 # Lower if we are not detecting small cells, raise if we are getting noise
 
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-    # Apply Contrast Limited Adaptive Histogram Equalization to boost contrast before applying Otsu
+    # Apply Contrast Limited Adaptive Histogram Equalization to boost contrast before applying Triangle threshold
     clahe = cv2.createCLAHE(clipLimit=2, tileGridSize=(8,8)) # Clip limit can be optimized (2-3 is optimal)
     enhanced = clahe.apply(img)
 
@@ -69,7 +71,7 @@ def process_directory(base_path):
                 features.append(apply_skeletonization(str(binarized_path), str(skeleton_path)))
                 print(f"Processed: {file}")
 
-    return features
+    return np.array(features)
 
 def setup_extract_features(skeletonized, binarized, data, features):
     for subfolder in os.listdir(binarized):
@@ -87,7 +89,6 @@ def setup_extract_features(skeletonized, binarized, data, features):
             # Extract features from the binarized images
             extract_features(skeletonized_subfolder_path, binarized_images, data_subfolder_path, features)
 
-# TODO: Use the extracted features from the skeletonization feature extraction
 def extract_features(skeleton_images, binarized_images, data_subfolder_path, features):
     for binarized_image_path in binarized_images:
         # Construct corresponding image path in data folder
@@ -97,6 +98,7 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
 
         # Ensure the corresponding image exists
         if os.path.exists(data_image_path) and os.path.exists(skeleton_image_path):
+
             # Load images
             binarized_image = cv2.imread(binarized_image_path, cv2.IMREAD_GRAYSCALE)
             data_image = cv2.imread(data_image_path, cv2.IMREAD_GRAYSCALE)
@@ -105,32 +107,27 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
             # Count number of little guys :3
             num_labels, labels = cv2.connectedComponents(binarized_image)
 
-            # Plot them
+            # Format plot and image for visualization
             plt.figure(figsize=(10, 5))
+            data_image = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)  # Convert to BGR for visualization
 
-            # Chatgpt evil visualization hack
-            output_image = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)  # Convert to BGR for visualization
-            for label in range(1, num_labels):  # Start from 1 to ignore background
-                mask = (labels == label).astype(np.uint8) * 255  # Get individual component
-                x, y, w, h = cv2.boundingRect(mask)
-                cv2.rectangle(output_image, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green bounding box
+            # Add rectangles and skeleton over original image
+            rectangle(data_image, labels, num_labels)
+            blended = blend(data_image, skeleton_image)
 
-            plt.subplot(1, 3, 1)
-            plt.imshow(cv2.cvtColor(output_image, cv2.COLOR_BGR2RGB))
-            plt.title(f"Binarized\nAstrocyte Count: {num_labels - 1}")
-            plt.axis("off")
-
-            plt.subplot(1, 3, 2)
-            plt.imshow(skeleton_image, cmap='gray')
-            plt.title("Skeleton")
-            plt.axis("off")
-
-            plt.subplot(1, 3, 3)
-            plt.imshow(data_image, cmap='gray')
+            plt.subplot(1, 2, 1)
+            plt.imshow(binarized_image, cmap='gray')
             plt.title(f"Data: {image_filename}")
             plt.axis("off")
 
+            plt.subplot(1, 2, 2)
+            plt.imshow(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB))
+            plt.title(f"Astrocyte Count: {num_labels - 1}")
+            plt.axis("off")
+
             plt.show()
+
+            # TODO: Use the extracted features from the skeletonization feature extraction
 
         else:
             print(f"Matching file not found in data for: {image_filename}")
@@ -172,6 +169,19 @@ def apply_skeletonization(binarized_file, skeletonized_file):
         })
 
     return features
+
+def blend(original, skeleton):
+    og = copy.deepcopy(original)
+    skeleton_mask = skeleton > 0
+    # Set original image to red where the skeleton mask exists to overlay skeleton on original
+    og[skeleton_mask] = [0, 0, 255]
+    return og
+
+def rectangle(data_image, labels, num_labels):
+    for label in range(1, num_labels):  # Start from 1 to ignore background
+        mask = (labels == label).astype(np.uint8) * 255  # Get individual component
+        x, y, w, h = cv2.boundingRect(mask)
+        cv2.rectangle(data_image, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green bounding box
 
 
 if __name__ == "__main__":
