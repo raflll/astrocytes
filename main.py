@@ -1,6 +1,7 @@
 import copy
 import os
 from skimage import io, morphology, measure, img_as_ubyte
+from skimage.filters import unsharp_mask
 import numpy as np
 from pathlib import Path
 import glob
@@ -11,16 +12,15 @@ from skan import Skeleton
 
 def binarize_image(image_path, output_path):
     # TODO: Make SIZE_FILTER dynamic depending on the image? I'm not sure if this is possible or necessary
-    SIZE_FILTER = 100 # Lower if we are not detecting small cells, raise if we are getting noise
+    SIZE_FILTER = 75 # Lower if we are not detecting small cells, raise if we are getting noise
 
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-    # Apply Contrast Limited Adaptive Histogram Equalization to boost contrast before applying Triangle threshold
-    clahe = cv2.createCLAHE(clipLimit=2, tileGridSize=(8,8)) # Clip limit can be optimized (2-3 is optimal)
-    enhanced = clahe.apply(img)
+    # apply unsharp mask filter
+    img = (unsharp_mask(img, radius=20, amount=2) * 255).astype(np.uint8)
 
     # Apply TRIANGLE threshold
-    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_TRIANGLE)
+    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_TRIANGLE)
 
     # Filter out noise
     labeled_array, num_features = ndimage.label(binary)
@@ -71,7 +71,7 @@ def process_directory(base_path):
                 features.append(apply_skeletonization(str(binarized_path), str(skeleton_path)))
                 print(f"Processed: {file}")
 
-    return np.array(features)
+    return features
 
 def setup_extract_features(skeletonized, binarized, data, features):
     for subfolder in os.listdir(binarized):
@@ -90,7 +90,7 @@ def setup_extract_features(skeletonized, binarized, data, features):
             extract_features(skeletonized_subfolder_path, binarized_images, data_subfolder_path, features)
 
 def extract_features(skeleton_images, binarized_images, data_subfolder_path, features):
-    for binarized_image_path in binarized_images:
+    for i, binarized_image_path in enumerate(binarized_images):
         # Construct corresponding image path in data folder
         image_filename = os.path.basename(binarized_image_path)
         data_image_path = os.path.join(data_subfolder_path, image_filename)
@@ -110,27 +110,54 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
             # Format plot and image for visualization
             plt.figure(figsize=(10, 5))
             data_image = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)  # Convert to BGR for visualization
+            binarized_image = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR) # Convert to BGR for visualization
 
             # Add rectangles and skeleton over original image
-            rectangle(data_image, labels, num_labels)
-            blended = blend(data_image, skeleton_image)
+            blended = blend(binarized_image, skeleton_image)
+            rectangle(binarized_image, labels, num_labels)
 
-            plt.subplot(1, 2, 1)
-            plt.imshow(binarized_image, cmap='gray')
+            plt.subplot(1, 2, 2)
+            plt.imshow(data_image, cmap='gray')
             plt.title(f"Data: {image_filename}")
             plt.axis("off")
 
-            plt.subplot(1, 2, 2)
+            plt.subplot(1, 2, 1)
             plt.imshow(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB))
             plt.title(f"Astrocyte Count: {num_labels - 1}")
             plt.axis("off")
 
+            print(get_features(features, i))
             plt.show()
 
             # TODO: Use the extracted features from the skeletonization feature extraction
 
         else:
             print(f"Matching file not found in data for: {image_filename}")
+
+def get_features(features, i):
+
+    Totals = {
+        "num_branches": 0,
+        "branch_lengths" : 0,
+        "total_skeleton_length" : 0,
+        "most_branches" : 0
+    }
+
+    for f in features[i]:
+        Totals["num_branches"] += f["num_branches"]
+        Totals["branch_lengths"] += sum(f["branch_lengths"])
+        Totals["total_skeleton_length"] += f["total_skeleton_length"]
+        Totals["most_branches"] = max(Totals["most_branches"], f["num_branches"])
+
+
+    Averages = {
+        "num_branches" : Totals["num_branches"] / len(features[i]),
+        "branch_lengths" : Totals["branch_lengths"] / Totals["num_branches"],
+        "skeleton_length" : Totals["total_skeleton_length"] / len(features[i]),
+        "most_branches" : Totals["most_branches"]
+    }
+
+    return Averages
 
 def apply_skeletonization(binarized_file, skeletonized_file):
     img = cv2.imread(binarized_file, cv2.IMREAD_GRAYSCALE)
