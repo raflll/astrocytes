@@ -24,7 +24,7 @@ def process_image(root, file, base_path, binarized_base, skeleton_base, features
 
     # Binarize image
     binarize_image(str(file_path), str(binarized_path))
-    features.append(apply_skeletonization(str(file_path), str(binarized_path), str(skeleton_path)))
+    features.append(apply_skeletonization(str(binarized_path), str(skeleton_path)))
     print(f"Processed: {file}")
     return features
 
