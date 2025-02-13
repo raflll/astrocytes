@@ -9,6 +9,7 @@ import cv2
 import matplotlib.pyplot as plt
 from scipy import ndimage
 from skan import Skeleton
+from concurrent.futures import ThreadPoolExecutor
 
 def binarize_image(image_path, output_path):
     # TODO: Make SIZE_FILTER dynamic depending on the image? I'm not sure if this is possible or necessary
@@ -35,41 +36,49 @@ def binarize_image(image_path, output_path):
 
     io.imsave(output_path, binary)
 
-
     return binary
 
-def process_directory(base_path):
+def process_image(file_path, binarized_dir, skeleton_dir):
+    binarized_path = binarized_dir / file_path.name
+    skeleton_path = skeleton_dir / file_path.name
+
+    # Binarize image
+    binarize_image(str(file_path), str(binarized_path))
+
+    # Apply skeletonization and return features
+    # In future, let's try to break this up
+    features = apply_skeletonization(str(binarized_path), str(skeleton_path))
+    
+    return features
+
+def process_directory(base_path, image_extensions={".tiff", ".tif", ".png"}):
     # Create output directory if it doesn't exist
-    binarized_base = "binarized_images"
-    skeleton_base = "skeletonized_images"
-    if not os.path.exists(binarized_base):
-        os.makedirs(binarized_base)
-    if not os.path.exists(skeleton_base):
-        os.makedirs(skeleton_base)
+    base_path = Path(base_path)
+    binarized_base = Path("binarized_images")
+    skeleton_base = Path("skeletonized_images")
 
+    binarized_base.mkdir(exist_ok=True)
+    skeleton_base.mkdir(exist_ok=True)
+
+    # Collect all image paths first
+    # This allows us to process images in parallel later
+    image_paths = []
+    for file_path in base_path.rglob("*"):
+        if file_path.suffix.lower() in image_extensions:
+            rel_path = file_path.parent.relative_to(base_path)
+            binarized_dir = binarized_base / rel_path
+            skeleton_dir = skeleton_base / rel_path
+
+            binarized_dir.mkdir(parents=True, exist_ok=True)
+            skeleton_dir.mkdir(parents=True, exist_ok=True)
+
+            image_paths.append((file_path, binarized_dir, skeleton_dir))
+
+    # Process images in parallel
     features = []
-
-    # Process all directories
-    for root, dirs, files in os.walk(base_path):
-        for file in files:
-            if file.endswith('.tiff'):
-                # Get full file paths
-                file_path = Path(root) / file
-
-                # Create corresponding output directory
-                rel_path = os.path.relpath(root, base_path)
-                binarized_dir = Path(binarized_base) / rel_path
-                binarized_dir.mkdir(parents=True, exist_ok=True)
-                skeleton_dir = Path(skeleton_base) / rel_path
-                skeleton_dir.mkdir(parents=True, exist_ok=True)
-
-                binarized_path = binarized_dir / file
-                skeleton_path = skeleton_dir / file
-
-                # Binarize image
-                binarize_image(str(file_path), str(binarized_path))
-                features.append(apply_skeletonization(str(binarized_path), str(skeleton_path)))
-                print(f"Processed: {file}")
+    with ThreadPoolExecutor() as executor:
+        results = executor.map(lambda args: process_image(*args), image_paths)
+        features.extend(results)
 
     return features
 
@@ -159,6 +168,8 @@ def get_features(features, i):
 
     return Averages
 
+# Can we break this function up?
+# Ideally, we would have one function for skeletonization and one for feature extraction
 def apply_skeletonization(binarized_file, skeletonized_file):
     img = cv2.imread(binarized_file, cv2.IMREAD_GRAYSCALE)
 
@@ -216,6 +227,9 @@ if __name__ == "__main__":
     base_path = "data"
     features = process_directory(base_path)
     print("Binarization complete.")
+
+    # TODO: By deafult, we should simply save a .csv with all of the data
+    # TODO: We should only show these individual images if the user sets debug=True
 
     # Extract features from the binarized images
     binarized_path = "binarized_images"
