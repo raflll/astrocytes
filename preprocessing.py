@@ -102,6 +102,7 @@ def apply_skeletonization(binarized_file, skeletonized_file):
             perimeter = cv2.arcLength(contours[0], True) if len(contours) > 0 else 0
 
             # Collect features for this astrocyte
+            #TODO: Add a second num branches that is just the number of tips from the pruned image in the mask
             features = {
                 "object_label": label,
                 "num_branches": len(skeleton_data) if len(skeleton_data) > 0 else 0,
