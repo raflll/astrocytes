@@ -154,18 +154,26 @@ def get_features(features, image_path):
 
     bl = Totals["branch_lengths"] / Totals["num_branches"] if Totals["num_branches"] > 0 else 0
     sl = Totals["total_skeleton_length"] / Totals["analyzed"]
-    ar = Totals["roundness"] / Totals["num_branches"]
-    aa = Totals["average_area"] / Totals["num_branches"]
+    ar = Totals["roundness"] / Totals["analyzed"]
+    aa = Totals["average_area"] / Totals["analyzed"]
+    ap = Totals["average_perimeter"] / Totals["analyzed"]
+    bd = Totals["num_branches"] / sl
+    ab = Totals["num_branches"] / Totals["analyzed"]
 
     Averages = {
         "num_branches": Totals["num_branches"],
         "branch_lengths": f"{bl:.3f}",
         "skeleton_length": f"{sl:.3f}",
-        "most_branches": Totals["most_branches"],
+        # "most_branches": Totals["most_branches"],
         "analyzed": Totals["analyzed"],
         "average_roundness": f"{ar:.3f}",
         "average_area" : f"{aa:.3f}",
-        "largest_area" : Totals["largest_area"]
+        # "largest_area" : Totals["largest_area"],
+        "average_perimeter" : f"{ap:.3f}",
+        # "largest_perimeter" : Totals["largest_perimeter"],
+        "thickness" : f"{aa / sl:.3f}",
+        "branch_density" : f"{bd:.3f}",
+        "average_branches" : f"{ab:.3f}"
     }
 
     return Averages
