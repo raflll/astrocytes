@@ -4,6 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import glob
+import pandas as pd
 
 def blend(original, skeleton):
     og = copy.deepcopy(original)
@@ -35,29 +36,32 @@ def setup_extract_features(skeletonized, binarized, data, features):
             extract_features(skeletonized_subfolder_path, binarized_images, data_subfolder_path, features)
 
 def extract_features(skeleton_images, binarized_images, data_subfolder_path, features):
+    # Create a dictionary to store features by subfolder
+    subfolder_features = {}
+
     for i, binarized_image_path in enumerate(binarized_images):
-        # Construct corresponding image path in data folder
+        # Get relative path for feature lookup
         image_filename = os.path.basename(binarized_image_path)
+        subfolder = os.path.basename(os.path.dirname(binarized_image_path))
+        feature_key = os.path.join(subfolder, image_filename)
+
         data_image_path = os.path.join(data_subfolder_path, image_filename)
         skeleton_image_path = os.path.join(skeleton_images, image_filename)
 
-        # Ensure the corresponding image exists
         if os.path.exists(data_image_path) and os.path.exists(skeleton_image_path):
-
             # Load images
             binarized_image = cv2.imread(binarized_image_path, cv2.IMREAD_GRAYSCALE)
             data_image = cv2.imread(data_image_path, cv2.IMREAD_GRAYSCALE)
             skeleton_image = cv2.imread(skeleton_image_path, cv2.IMREAD_GRAYSCALE)
 
-            # Count number of little guys :3
+            # Count components
             num_labels, labels = cv2.connectedComponents(binarized_image)
 
-            # Format plot and image for visualization
+            # Visualization code (unchanged)
             plt.figure(figsize=(10, 5))
-            data_image = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)  # Convert to BGR for visualization
-            binarized_image = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR) # Convert to BGR for visualization
+            data_image = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
+            binarized_image = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
 
-            # Add rectangles and skeleton over original image
             blended = blend(binarized_image, skeleton_image)
             rectangle(binarized_image, labels, num_labels)
 
@@ -71,27 +75,68 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
             plt.title(f"Astrocyte Count: {num_labels - 1}")
             plt.axis("off")
 
-            print(get_features(features, i))
+            # Get features and store them
+            feature_stats = get_features(features, feature_key)
+            if feature_stats:
+                # Add image filename to the features
+                feature_stats['image_filename'] = image_filename
+
+                # Initialize list for this subfolder if it doesn't exist
+                if subfolder not in subfolder_features:
+                    subfolder_features[subfolder] = []
+
+                # Add features to the appropriate subfolder list
+                subfolder_features[subfolder].append(feature_stats)
+
+                print(feature_stats)
             plt.show()
-
-            # TODO: Use the extracted features from the skeletonization feature extraction
-
         else:
             print(f"Matching file not found in data for: {image_filename}")
 
-def get_features(features, i):
+    # Save features to CSV files for each subfolder
+    save_features_to_csv(subfolder_features)
+
+def save_features_to_csv(subfolder_features):
+    """
+    Save extracted features to CSV files, one for each subfolder
+    """
+    for subfolder, features_list in subfolder_features.items():
+        if features_list:
+            # Convert list of features to DataFrame
+            df = pd.DataFrame(features_list)
+
+            # Create output directory if it doesn't exist
+            output_dir = 'extracted_features'
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Save to CSV
+            csv_filename = os.path.join(output_dir, f'{subfolder}_features.csv')
+            df.to_csv(csv_filename, index=False)
+            print(f"Saved features for {subfolder} to {csv_filename}")
+
+def get_features(features, image_path):
+    # Now features is a dictionary and image_path is the key
+    if image_path not in features:
+        return None
+
+    astrocyte_features = features[image_path]
 
     Totals = {
         "num_branches": 0,
-        "branch_lengths" : 0,
-        "total_skeleton_length" : 0,
-        "most_branches" : 0,
-        "analyzed" : 0,
-        "perimeter" : 0,
-        "roundness" : 0
+        "branch_lengths": 0,
+        "total_skeleton_length": 0,
+        "most_branches": 0,
+        "analyzed": 0,
+        "perimeter": 0,
+        "roundness": 0,
+        "average_area": 0,
+        "largest_area": 0,
+        "average_perimeter": 0,
+        "largest_perimeter": 0
+
     }
 
-    for f in features[i]:
+    for f in astrocyte_features:  # Iterate through features for each astrocyte
         Totals["num_branches"] += f["num_branches"]
         Totals["branch_lengths"] += sum(f["branch_lengths"])
         Totals["total_skeleton_length"] += f["total_skeleton_length"]
@@ -99,14 +144,28 @@ def get_features(features, i):
         Totals["analyzed"] += 1
         Totals["perimeter"] += f["perimeter"]
         Totals["roundness"] += f["roundness"]
+        Totals["average_area"] += f["area"]
+        Totals["largest_area"] = max(Totals["largest_area"], f["area"])
+        Totals["average_perimeter"] += f["perimeter"]
+        Totals["largest_perimeter"] = max(Totals["largest_perimeter"], f["perimeter"])
 
+    if Totals["analyzed"] == 0:
+        return Totals
+
+    bl = Totals["branch_lengths"] / Totals["num_branches"] if Totals["num_branches"] > 0 else 0
+    sl = Totals["total_skeleton_length"] / Totals["analyzed"]
+    ar = Totals["roundness"] / Totals["num_branches"]
+    aa = Totals["average_area"] / Totals["num_branches"]
 
     Averages = {
-        "num_branches" : Totals["num_branches"],
-        "branch_lengths" : Totals["branch_lengths"] / Totals["num_branches"],
-        "skeleton_length" : Totals["total_skeleton_length"] / len(features[i]),
-        "most_branches" : Totals["most_branches"],
-        "analyzed" : Totals["analyzed"]
+        "num_branches": Totals["num_branches"],
+        "branch_lengths": f"{bl:.3f}",
+        "skeleton_length": f"{sl:.3f}",
+        "most_branches": Totals["most_branches"],
+        "analyzed": Totals["analyzed"],
+        "average_roundness": f"{ar:.3f}",
+        "average_area" : f"{aa:.3f}",
+        "largest_area" : Totals["largest_area"]
     }
 
     return Averages

@@ -8,7 +8,7 @@ from plantcv import plantcv as pcv
 import os
 from pathlib import Path
 
-def process_image(root, file, base_path, binarized_base, skeleton_base, features):
+def process_image(root, file, base_path, binarized_base, skeleton_base):
     # Get full file paths
     file_path = Path(root) / file
 
@@ -24,9 +24,7 @@ def process_image(root, file, base_path, binarized_base, skeleton_base, features
 
     # Binarize image
     binarize_image(str(file_path), str(binarized_path))
-    features.append(apply_skeletonization(str(binarized_path), str(skeleton_path)))
-    print(f"Processed: {file}")
-    return features
+    return apply_skeletonization(str(binarized_path), str(skeleton_path))  # Return features directly
 
 def binarize_image(image_path, output_path):
     SIZE_FILTER = 75 # Lower if we are not detecting small cells, raise if we are getting noise
@@ -55,8 +53,8 @@ def binarize_image(image_path, output_path):
     return binary
 
 def apply_skeletonization(binarized_file, skeletonized_file):
-    #TODO: MAKE NOT SCUFFED
-    PRUNE_SIZE = 10
+    #TODO: Extract features to a csv file to save on time
+    PRUNE_SIZE = 3
 
     # load binarized image and convert to np.uint8
     img = cv2.imread(binarized_file, cv2.IMREAD_GRAYSCALE)
@@ -67,23 +65,27 @@ def apply_skeletonization(binarized_file, skeletonized_file):
 
     # Create an empty image for all skeletons
     all_skeletons = np.zeros_like(binary_img)
-
     all_features = []
+
+    complete_skeleton = pcv.morphology.skeletonize(mask=binary_img)
+    pruned_complete_skeleton = pcv.morphology.prune(skel_img=complete_skeleton, size=PRUNE_SIZE)
 
     # Process each astrocyte individually
     for label in range(1, num_labels):  # Start from 1 to skip background
         # Create mask for current astrocyte
         astrocyte_mask = (labels == label).astype(np.uint8) * 255
+        if np.sum(astrocyte_mask) == 0:
+            print("Warning: Astrocyte mask does not exist")
+            continue
 
         # Skeletonize individual astrocyte
-        skeleton = pcv.morphology.skeletonize(mask=astrocyte_mask)
-        pruned_skeleton = pcv.morphology.prune(skel_img=skeleton, size=PRUNE_SIZE)
+        individual_skeleton = pruned_complete_skeleton[0] & (astrocyte_mask > 0)
 
         # Add to complete skeleton image
-        all_skeletons |= (pruned_skeleton[0] * 255).astype(np.uint8)
+        all_skeletons |= (individual_skeleton * 255).astype(np.uint8)
 
         # Convert to format compatible with skan
-        skeleton_uint8 = (pruned_skeleton[0] > 0).astype(np.uint8) * 255
+        skeleton_uint8 = (individual_skeleton > 0).astype(np.uint8) * 255
 
         try:
             # Check if skeleton is empty
@@ -92,8 +94,8 @@ def apply_skeletonization(binarized_file, skeletonized_file):
                 continue
 
             # Feature extraction
-            skeleton_obj = Skeleton(skeleton_uint8, keep_images=True)  # Add keep_images=True
-            skeleton_data = summarize(skeleton_obj, separator='-')  # Specify separator explicitly
+            skeleton_obj = Skeleton(skeleton_uint8)
+            skeleton_data = summarize(skeleton_obj, separator = '-')
 
             # Calculations for perimeter
             contours, _ = cv2.findContours(astrocyte_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -122,6 +124,8 @@ def apply_skeletonization(binarized_file, skeletonized_file):
 
     # Save complete skeleton image
     cv2.imwrite(skeletonized_file, all_skeletons)
+
+    print(f"Processed: {binarized_file}")
 
     return all_features if all_features else [{"object_label": 0, "num_branches": 0, "branch_lengths": [],
                                              "total_skeleton_length": 0, "area": 0, "perimeter": 0, "roundness": 0}]
