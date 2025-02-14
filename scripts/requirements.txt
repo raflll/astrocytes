@@ -1,0 +1,8 @@
+opencv-python
+matplotlib
+numpy
+scikit-image
+scipy
+plantcv
+porespy
+pandas
