@@ -30,17 +30,17 @@ for folder in FOLDERS:
 
         # Binarize image
         original_img, binarized_img = binarize(input_path)
-        save_image(binarized_img, os.path.join(OUTPUT_BINARIZED, folder, f"{image_name}"))
+        save_image(binarized_img, os.path.join(OUTPUT_BINARIZED, folder, f"{image_name}")) # see utils
 
         # Skeletonize image
         skeletonized_img = skeletonize_and_prune(original_img, binarized_img, prune_size=10)
         save_image(skeletonized_img, os.path.join(OUTPUT_SKELETONIZED, folder, f"{image_name}"))
 
-        # Extract features and pass the image name
+        # Extract features for each component in image
         features = extract_features(binarized_img, skeletonized_img, image_name=image_name)
         all_features.extend(features)
 
-    # Convert to DataFrame and save
+    # Store all features in one df (see utils)
     df = pd.DataFrame(all_features)
     save_dataframe(df, os.path.join(OUTPUT_FEATURES, f"{folder}_features.csv"))
 
