@@ -16,6 +16,8 @@ def get_image(input_path, unsharp=False):
 
     return image
 
+
+# Can set binarization method, using new method right now (2.13.25)
 def binarize(input_path, method="new", plot=False):
 
     if method == "new":
@@ -151,7 +153,7 @@ def skeletonize_and_prune(original_img, binarized_img, prune_size, plot=False):
     
     # pcv.params.debug = "plot"
 
-    skeleton_pruned, _, _ = pcv.morphology.prune(skel_img=skeleton, size=prune_size)
+    skeleton_pruned, _, _ = pcv.morphology.prune(skel_img=skeleton, size=prune_size) # using prune size 10 for now
 
     if plot:
         fig, ax = plt.subplots(1, 3, figsize=(15, 15))
