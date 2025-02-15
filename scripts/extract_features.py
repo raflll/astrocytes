@@ -68,7 +68,7 @@ def extract_features(binarized_img, skeleton_pruned, image_name=None):
         else:
             fractal_dim = 0 # astrocyte with no projections is not fractal, so FD does not apply
 
-        if fractal_dim > 2: # function returned large fractal dimension for small, low-res images, so getting rid of them
+        if fractal_dim > 1.6: # function returned large fractal dimension for small, low-res images, so getting rid of them
             fractal_dim = -1
 
         fractal_dims.append(fractal_dim) # testing purposes
