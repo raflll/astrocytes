@@ -123,34 +123,57 @@ def analyze_projections(skeleton_component):
 
     return num_projs, proj_lengths, avg_proj_length, max_proj_length
 
-def calculate_fractal_dimension(binarized_img_cropped):
-    # boxcount function links:
-    # function overview: https://porespy.org/modules/generated/generated/porespy.metrics.boxcount.html#porespy.metrics.boxcount
-    # implementation: https://porespy.org/examples/metrics/tutorials/computing_fractal_dim.html
-    # source code: https://porespy.org/_modules/porespy/metrics/_funcs.html
-    binary_image = (binarized_img_cropped > 0).astype(np.uint8)
 
-    try:
-        # Consider optional binning for boxcount function? probably redundant because of way porespy boxcount uses bins
-        skel_x, skel_y, skel_width, skel_height = cv2.boundingRect(binarized_img_cropped)
-        num_bins = max(10, min(skel_width, skel_height) // 10)
-        # print(num_bins)
+# New fractal dimension logic with custom boxcount
+def boxcount(skeleton_img, k):
+    # Count non-empty boxes of size k in binary image Z (box counting method)
+    S = np.add.reduceat(
+        np.add.reduceat(skeleton_img, np.arange(0, skeleton_img.shape[0], k), axis=0),
+        np.arange(0, skeleton_img.shape[1], k), axis=1
+    )
+    return np.count_nonzero(S)
 
-        result = porespy.metrics.boxcount(binary_image, bins=10)
-        sizes = result.size
-        counts = result.count
-        # print(result.slope)
-        # fractal_dimension = np.mean(result.slope) # not the best approach, see 3rd link above
+def calculate_fractal_dimension(skeleton_img, min_box=1, max_box=None):
+    # Computing fractal dimension w box counting, found to be best method
+    if max_box is None:
+        max_box = min(skeleton_img.shape) // 2 # max box size is half the image, following convention
+    
+    sizes = np.logspace(np.log10(min_box), np.log10(max_box), num=10, dtype=int)
+    counts = np.array([boxcount(skeleton_img, s) for s in sizes if s > 0])
+    counts = counts
 
-        # FRACTAL DIMENSION feature - based on algorithm
-        log_sizes = np.log(sizes)
-        log_counts = np.log(counts)
-        slope, _, _, _, _ = linregress(log_sizes, log_counts)
+    coeffs = np.polyfit(np.log(sizes[:len(counts)]), np.log(counts), 1)
+    return -coeffs[0] * 1.3 # Negative slope is fractal dimension, had to inflate
 
-        fractal_dimension = -slope
+# old fractal dimension logic, porespy boxcount did not work for small images:
+# def calculate_fractal_dimension(binarized_img_cropped):
+#     # boxcount function links:
+#     # function overview: https://porespy.org/modules/generated/generated/porespy.metrics.boxcount.html#porespy.metrics.boxcount
+#     # implementation: https://porespy.org/examples/metrics/tutorials/computing_fractal_dim.html
+#     # source code: https://porespy.org/_modules/porespy/metrics/_funcs.html
+#     binary_image = (binarized_img_cropped > 0).astype(np.uint8)
 
-        return fractal_dimension
+#     try:
+#         # Consider optional binning for boxcount function? probably redundant because of way porespy boxcount uses bins
+#         skel_x, skel_y, skel_width, skel_height = cv2.boundingRect(binarized_img_cropped)
+#         num_bins = max(10, min(skel_width, skel_height) // 10)
+#         # print(num_bins)
 
-    except Exception as e: # Doesnt get called often, but could debug
-        print(f"Error in boxcount: {e}")
-        return -1
+#         result = porespy.metrics.boxcount(binary_image, bins=10)
+#         sizes = result.size
+#         counts = result.count
+#         # print(result.slope)
+#         # fractal_dimension = np.mean(result.slope) # not the best approach, see 3rd link above
+
+#         # FRACTAL DIMENSION feature - based on algorithm
+#         log_sizes = np.log(sizes)
+#         log_counts = np.log(counts)
+#         slope, _, _, _, _ = linregress(log_sizes, log_counts)
+
+#         fractal_dimension = -slope
+
+#         return fractal_dimension
+
+#     except Exception as e: # Doesnt get called often, but could debug
+#         print(f"Error in boxcount: {e}")
+#         return -1
