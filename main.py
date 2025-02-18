@@ -1,5 +1,6 @@
 from preprocessing import *
 from postprocessing import *
+from charts import *
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -79,7 +80,13 @@ if __name__ == "__main__":
         binarized_path = "binarized_images"
         skeleton_path = "skeletonized_images"
         visuals = False
+        show_charts = True
+
         setup_extract_features(skeleton_path, binarized_path, input_path, features, visuals)
         print("Features extracted to extracted_features")
+
+        if show_charts:
+            charts()
+
     else:
         print("Processing failed. Please check the input path and try again.")
