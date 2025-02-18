@@ -5,6 +5,7 @@ import os
 import matplotlib.pyplot as plt
 import glob
 import pandas as pd
+import math
 
 def blend(original, skeleton):
     og = copy.deepcopy(original)
@@ -19,7 +20,7 @@ def rectangle(data_image, labels, num_labels):
         x, y, w, h = cv2.boundingRect(mask)
         cv2.rectangle(data_image, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green bounding box
 
-def setup_extract_features(skeletonized, binarized, data, features):
+def setup_extract_features(skeletonized, binarized, data, features, visual):
     for subfolder in os.listdir(binarized):
         binarized_subfolder_path = os.path.join(binarized, subfolder)
         data_subfolder_path = os.path.join(data, subfolder)
@@ -33,9 +34,10 @@ def setup_extract_features(skeletonized, binarized, data, features):
             binarized_images = glob.glob(os.path.join(binarized_subfolder_path, "*.tiff"))
 
             # Extract features from the binarized images
-            extract_features(skeletonized_subfolder_path, binarized_images, data_subfolder_path, features)
+            extract_features(skeletonized_subfolder_path, binarized_images,
+                             data_subfolder_path, features, visual)
 
-def extract_features(skeleton_images, binarized_images, data_subfolder_path, features):
+def extract_features(skeleton_images, binarized_images, data_subfolder_path, features, visual):
     # Create a dictionary to store features by subfolder
     subfolder_features = {}
 
@@ -48,7 +50,7 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
         data_image_path = os.path.join(data_subfolder_path, image_filename)
         skeleton_image_path = os.path.join(skeleton_images, image_filename)
 
-        if os.path.exists(data_image_path) and os.path.exists(skeleton_image_path):
+        if os.path.exists(data_image_path) and os.path.exists(skeleton_image_path) and visual:
             # Load images
             binarized_image = cv2.imread(binarized_image_path, cv2.IMREAD_GRAYSCALE)
             data_image = cv2.imread(data_image_path, cv2.IMREAD_GRAYSCALE)
@@ -90,16 +92,14 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
 
                 print(feature_stats)
             plt.show()
-        else:
+        elif visual:
             print(f"Matching file not found in data for: {image_filename}")
 
     # Save features to CSV files for each subfolder
     save_features_to_csv(subfolder_features)
 
 def save_features_to_csv(subfolder_features):
-    """
-    Save extracted features to CSV files, one for each subfolder
-    """
+    # Save extracted features to csv for subfolder
     for subfolder, features_list in subfolder_features.items():
         if features_list:
             # Convert list of features to DataFrame
@@ -132,8 +132,9 @@ def get_features(features, image_path):
         "average_area": 0,
         "largest_area": 0,
         "average_perimeter": 0,
-        "largest_perimeter": 0
-
+        "largest_perimeter": 0,
+        "circularity": 0,
+        "roundness_variance": 0
     }
 
     for f in astrocyte_features:  # Iterate through features for each astrocyte
@@ -148,6 +149,7 @@ def get_features(features, image_path):
         Totals["largest_area"] = max(Totals["largest_area"], f["area"])
         Totals["average_perimeter"] += f["perimeter"]
         Totals["largest_perimeter"] = max(Totals["largest_perimeter"], f["perimeter"])
+        Totals["circularity"] += f["circularity"]
 
     if Totals["analyzed"] == 0:
         return Totals
@@ -159,21 +161,30 @@ def get_features(features, image_path):
     ap = Totals["average_perimeter"] / Totals["analyzed"]
     bd = Totals["num_branches"] / sl
     ab = Totals["num_branches"] / Totals["analyzed"]
+    ac = Totals["circularity"] / Totals["analyzed"]
+
+    for f in astrocyte_features:
+        Totals["roundness_variance"] += (f["roundness"] - ar)**2
+
+    rv = Totals["roundness_variance"] / (Totals["analyzed"] - 1)
+
 
     Averages = {
-        "num_branches": Totals["num_branches"],
+        # "num_branches": Totals["num_branches"],
         "branch_lengths": f"{bl:.3f}",
-        "skeleton_length": f"{sl:.3f}",
+        # "skeleton_length": f"{sl:.3f}",
         # "most_branches": Totals["most_branches"],
         "analyzed": Totals["analyzed"],
         "average_roundness": f"{ar:.3f}",
         "average_area" : f"{aa:.3f}",
-        # "largest_area" : Totals["largest_area"],
-        "average_perimeter" : f"{ap:.3f}",
+        "a_ratio" : f"{aa / Totals['largest_area']:.3f}",
+        # "average_perimeter" : f"{ap:.3f}",
         # "largest_perimeter" : Totals["largest_perimeter"],
         "thickness" : f"{aa / sl:.3f}",
         "branch_density" : f"{bd:.3f}",
-        "average_branches" : f"{ab:.3f}"
+        # "average_branches" : f"{ab:.3f}",
+        "average_circularity" : f"{ac:.3f}",
+        "roundness_variance" : f"{rv:.3f}"
     }
 
     return Averages
