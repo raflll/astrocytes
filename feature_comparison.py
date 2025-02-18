@@ -2,6 +2,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 import pandas as pd
+import seaborn as sns
 
 # Reload the newly uploaded datasets
 updated_file_paths = {
@@ -11,23 +12,23 @@ updated_file_paths = {
 }
 
 # Load the new datasets
-updated_dataframes = {key: pd.read_csv(path) for key, path in updated_file_paths.items()}
+dataframes = {key: pd.read_csv(path) for key, path in updated_file_paths.items()}
 
 # Assign labels to each dataset
-updated_dataframes["Phenotype_1"]["label"] = 1
-updated_dataframes["Phenotype_2"]["label"] = 2
-updated_dataframes["Control"]["label"] = 0
+dataframes["Phenotype_1"]["label"] = 1
+dataframes["Phenotype_2"]["label"] = 2
+dataframes["Control"]["label"] = 0
 
 # Combine datasets
-df_updated_combined = pd.concat(updated_dataframes.values(), ignore_index=True)
+df_combined = pd.concat(dataframes.values(), ignore_index=True)
 
 # Drop non-numeric column (if exists)
-if "image_filename" in df_updated_combined.columns:
-    df_updated_combined = df_updated_combined.drop(columns=["image_filename"])
+if "image_filename" in df_combined.columns:
+    df_combined = df_combined.drop(columns=["image_filename"])
 
 # Separate features and target label
-X_updated = df_updated_combined.drop(columns=["label"])
-y_updated = df_updated_combined["label"]
+X_updated = df_combined.drop(columns=["label"])
+y_updated = df_combined["label"]
 
 # Train Random Forest model with updated features
 rf_classifier_updated = RandomForestClassifier(n_estimators=200, max_depth=10, min_samples_split=5, min_samples_leaf=2, max_features='sqrt', random_state=42)
@@ -51,6 +52,16 @@ plt.xlabel("Feature Importance")
 plt.ylabel("Feature")
 plt.title("Feature Importance in Updated Random Forest Classifier")
 plt.gca().invert_yaxis()
+plt.show()
+
+
+# Compute correlation matrix
+correlation_matrix = df_combined.corr()
+
+# Plot heatmap
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5)
+plt.title("Correlation Matrix of Features")
 plt.show()
 
 # Display feature importance values
