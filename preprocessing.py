@@ -152,10 +152,11 @@ def apply_skeletonization(binarized_file, skeletonized_file):
     labels_list = list(range(1, num_labels))  # Start from 1 to skip background
     all_features = []
     all_individual_skeletons = []
+    results = []
 
     # Use ThreadPoolExecutor to parallelize feature extraction
-    with ThreadPoolExecutor() as executor:
-        results = list(executor.map(lambda label: process_astrocyte(label, labels, pruned_complete_skeleton), labels_list))
+    for label in labels_list:
+        results.append(process_astrocyte(label, labels, pruned_complete_skeleton))
 
     # Process results: collect features and merge skeletons
     for feature, skeleton in results:
@@ -173,8 +174,9 @@ def apply_skeletonization(binarized_file, skeletonized_file):
 
     print(f"Processed: {binarized_file}")
 
-    return all_features if all_features else [{"object_label": 0, "num_branches": 0, "branch_lengths": [],
-                                               "total_skeleton_length": 0, "area": 0, "perimeter": 0, "roundness": 0}]
+    return all_features if all_features else [{"object_label": 0, "num_branches": 0, "num_projections" : 0, "branch_lengths": [],
+            "total_skeleton_length": 0, "area": 0, "fractal_dim": 0, "perimeter": 0, "circularity": 0, "roundness": 0,
+            "projection_lengths": [], "num_neighbors" : 0, "length_width_ratio" : 0}]
 
 def process_astrocyte(label, labels, pruned_complete_skeleton):
     # TODO: create documentation for how each of the features are calculated
@@ -202,8 +204,14 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
         contours, _ = cv2.findContours(astrocyte_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         perimeter = cv2.arcLength(contours[0], True) if len(contours) > 0 else 0
 
-        num_projs2, proj_lengths, avg_proj_length, max_proj_length = analyze_projections(individual_skeleton)
+        # LENGTH/WIDTH RATIO feature
+        x, y, width, height = cv2.boundingRect(astrocyte_mask)
+        length = max(width, height)
+        width = min(width, height)
+        length_width_ratio = length / width if width > 0 else 0
 
+        # Nikhita's FRACTAL DIMENSION
+        num_projs2, proj_lengths, avg_proj_length, max_proj_length = analyze_projections(skeleton_uint8)
         if num_projs2 > 0:
             fractal_dim = calculate_fractal_dimension(astrocyte_mask) # see function
         else:
@@ -211,6 +219,13 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
 
         if fractal_dim > 1.6: # function returned large fractal dimension for small, low-res images, so getting rid of them
             fractal_dim = -1
+
+        # Nikhita's NEIGHBORS feature
+        kernel = np.ones((70, 70), np.uint8) # need to determine the area to consider for neighbors
+        dilated_mask = cv2.dilate(astrocyte_mask, kernel, iterations=1)
+        neighbors = np.unique(labels[dilated_mask > 0])
+        neighbors = neighbors[(neighbors != label) & (neighbors != 0)]  # removing current component and 0 (background)
+        num_neighbors = len(neighbors)
 
 
         # Collect features for this astrocyte
@@ -224,7 +239,10 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
             "fractal_dim": fractal_dim,
             "perimeter": perimeter,
             "circularity": (4 * np.pi * np.sum(astrocyte_mask > 0)) / (perimeter ** 2) if perimeter > 0 else 0,
-            "roundness": perimeter**2 / (4 * math.pi * np.sum(astrocyte_mask > 0))
+            "roundness": perimeter**2 / (4 * math.pi * np.sum(astrocyte_mask > 0)),
+            "projection_lengths": proj_lengths,
+            "num_neighbors" : num_neighbors,
+            "length_width_ratio" : length_width_ratio
         }
 
         # Return both features and the pruned skeleton
@@ -257,9 +275,8 @@ def analyze_projections(skeleton_component):
     return num_projs, proj_lengths, avg_proj_length, max_proj_length
 
 def calculate_fractal_dimension(skeleton_img, min_box=1, max_box=None):
-    # Computing fractal dimension w box counting, found to be best method
-    if max_box is None:
-        max_box = min(skeleton_img.shape) // 2 # max box size is half the image, following convention
+    # Computing fractal dimension w box counting, found to be the best method
+    if max_box is None: max_box = min(skeleton_img.shape) // 2 # max box size is half the image, following convention
 
     sizes = np.logspace(np.log10(min_box), np.log10(max_box), num=10, dtype=int)
     counts = np.array([boxcount(skeleton_img, s) for s in sizes if s > 0])

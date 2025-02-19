@@ -135,7 +135,11 @@ def get_features(features, image_path):
         "circularity": 0,
         "roundness_variance": 0,
         "fractal_dim": 0,
-        "num_projections": 0
+        "num_projections": 0,
+        "num_neighbors": 0,
+        "proj_length": 0,
+        "most_neighbors": 0,
+        "most_projections": 0
     }
 
     for f in astrocyte_features:  # Iterate through features for each astrocyte
@@ -153,42 +157,52 @@ def get_features(features, image_path):
         Totals["circularity"] += f["circularity"]
         Totals["fractal_dim"] += f["fractal_dim"]
         Totals["num_projections"] += f["num_projections"]
+        Totals["proj_length"] += sum(f["projection_lengths"])
+        Totals["num_neighbors"] += f["num_neighbors"]
+        Totals["most_neighbors"] = max(Totals["most_neighbors"], f["num_neighbors"])
+        Totals["most_projections"] = max(Totals["most_projections"], f["num_projections"])
 
     bl = Totals["branch_lengths"] / Totals["num_branches"] if Totals["num_branches"] > 0 else 0
     sl = Totals["total_skeleton_length"] / Totals["analyzed"]
     ar = Totals["roundness"] / Totals["analyzed"]
     aa = Totals["average_area"] / Totals["analyzed"]
     ap = Totals["average_perimeter"] / Totals["analyzed"]
-    bd = Totals["num_branches"] / sl
+    bd = Totals["num_branches"]/ Totals["analyzed"] / sl if sl > 0 else 0
     ab = Totals["num_branches"] / Totals["analyzed"]
     ac = Totals["circularity"] / Totals["analyzed"]
     anp = Totals["num_projections"] / Totals["analyzed"]
     afd = Totals["fractal_dim"] / Totals["analyzed"]
+    nn = Totals["num_neighbors"] / Totals["analyzed"]
+    pl = Totals["proj_length"] / Totals["analyzed"]
 
     for f in astrocyte_features:
         Totals["roundness_variance"] += (f["roundness"] - ar)**2
 
-    rv = Totals["roundness_variance"] / (Totals["analyzed"] - 1)
+    rv = Totals["roundness_variance"] / (Totals["analyzed"] - 1) if Totals["analyzed"] > 1 else 0
 
 
     Averages = {
-        # "num_branches": Totals["num_branches"],
+        "num_branches": f"{bl:.3f}",
         "branch_lengths": f"{bl:.3f}",
-        # "skeleton_length": f"{sl:.3f}",
-        # "most_branches": Totals["most_branches"],
+        "skeleton_length": f"{sl:.3f}",
+        "most_branches": Totals["most_branches"],
         "analyzed": Totals["analyzed"],
         "average_roundness": f"{ar:.3f}",
         "average_area" : f"{aa:.3f}",
-        "a_ratio" : f"{aa / Totals['largest_area']:.3f}",
-        # "average_perimeter" : f"{ap:.3f}",
-        # "largest_perimeter" : Totals["largest_perimeter"],
+        "a_ratio" : f"{aa / Totals['largest_area']:.3f}", # Probably useless
+        "average_perimeter" : f"{ap:.3f}",
+        "largest_perimeter" : Totals["largest_perimeter"], # Found to be useless
         "thickness" : f"{aa / sl:.3f}",
         "branch_density" : f"{bd:.3f}",
-        # "average_branches" : f"{ab:.3f}",
+        "average_branches" : f"{ab:.3f}", # Found to be useless
         "average_circularity" : f"{ac:.3f}",
         "roundness_variance" : f"{rv:.3f}",
         "average_fractal_dim" : f"{afd:.3f}",
-        "average_num_projections" : f"{anp:.3f}"
+        "average_num_projections" : f"{anp:.3f}",
+        "num_neighbors" : f"{nn:.3f}",
+        "proj_length": f"{pl:.3f}",
+        "most_neighbors": Totals["most_neighbors"],
+        "most_projections": Totals["most_projections"]
     }
 
     return Averages

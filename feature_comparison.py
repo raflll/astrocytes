@@ -1,8 +1,7 @@
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
 import pandas as pd
 import seaborn as sns
+import numpy as np
 
 # Reload the newly uploaded datasets
 updated_file_paths = {
@@ -58,9 +57,24 @@ plt.show()
 # Compute correlation matrix
 correlation_matrix = df_combined.corr()
 
+# Mask for upper triangle
+mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
+
 # Plot heatmap
 plt.figure(figsize=(10, 8))
-sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5)
+# Draw the heatmap with the mask and correct aspect ratio
+sns.heatmap(
+    correlation_matrix,
+    mask=mask,
+    annot=True,
+    cmap="coolwarm",
+    fmt=".2f",
+    linewidths=0.5,
+    annot_kws={"size": 8}  # Reduce font size for annotations
+)
+
+plt.xticks(rotation=45, ha='right', fontsize=6)
+plt.yticks(fontsize=6)
 plt.title("Correlation Matrix of Features")
 plt.show()
 
