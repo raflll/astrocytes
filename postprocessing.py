@@ -50,7 +50,7 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
         data_image_path = os.path.join(data_subfolder_path, image_filename)
         skeleton_image_path = os.path.join(skeleton_images, image_filename)
 
-        if os.path.exists(data_image_path) and os.path.exists(skeleton_image_path) and visual:
+        if os.path.exists(data_image_path) and os.path.exists(skeleton_image_path):
             # Load images
             binarized_image = cv2.imread(binarized_image_path, cv2.IMREAD_GRAYSCALE)
             data_image = cv2.imread(data_image_path, cv2.IMREAD_GRAYSCALE)
@@ -78,7 +78,7 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
             plt.axis("off")
 
             # Get features and store them
-            feature_stats = get_features(features, feature_key)
+            feature_stats = get_features(features, image_filename)
             if feature_stats:
                 # Add image filename to the features
                 feature_stats['image_filename'] = image_filename
@@ -89,12 +89,10 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
 
                 # Add features to the appropriate subfolder list
                 subfolder_features[subfolder].append(feature_stats)
-
-                print(feature_stats)
-            plt.show()
-        elif visual:
+            if visual: plt.show()
+            else: plt.close()
+        else:
             print(f"Matching file not found in data for: {image_filename}")
-
     # Save features to CSV files for each subfolder
     save_features_to_csv(subfolder_features)
 
@@ -115,6 +113,7 @@ def save_features_to_csv(subfolder_features):
             print(f"Saved features for {subfolder} to {csv_filename}")
 
 def get_features(features, image_path):
+    # TODO: create documentation for how each of the features are calculated
     # Now features is a dictionary and image_path is the key
     if image_path not in features:
         return None
@@ -134,7 +133,9 @@ def get_features(features, image_path):
         "average_perimeter": 0,
         "largest_perimeter": 0,
         "circularity": 0,
-        "roundness_variance": 0
+        "roundness_variance": 0,
+        "fractal_dim": 0,
+        "num_projections": 0
     }
 
     for f in astrocyte_features:  # Iterate through features for each astrocyte
@@ -150,9 +151,8 @@ def get_features(features, image_path):
         Totals["average_perimeter"] += f["perimeter"]
         Totals["largest_perimeter"] = max(Totals["largest_perimeter"], f["perimeter"])
         Totals["circularity"] += f["circularity"]
-
-    if Totals["analyzed"] == 0:
-        return Totals
+        Totals["fractal_dim"] += f["fractal_dim"]
+        Totals["num_projections"] += f["num_projections"]
 
     bl = Totals["branch_lengths"] / Totals["num_branches"] if Totals["num_branches"] > 0 else 0
     sl = Totals["total_skeleton_length"] / Totals["analyzed"]
@@ -162,6 +162,8 @@ def get_features(features, image_path):
     bd = Totals["num_branches"] / sl
     ab = Totals["num_branches"] / Totals["analyzed"]
     ac = Totals["circularity"] / Totals["analyzed"]
+    anp = Totals["num_projections"] / Totals["analyzed"]
+    afd = Totals["fractal_dim"] / Totals["analyzed"]
 
     for f in astrocyte_features:
         Totals["roundness_variance"] += (f["roundness"] - ar)**2
@@ -184,7 +186,9 @@ def get_features(features, image_path):
         "branch_density" : f"{bd:.3f}",
         # "average_branches" : f"{ab:.3f}",
         "average_circularity" : f"{ac:.3f}",
-        "roundness_variance" : f"{rv:.3f}"
+        "roundness_variance" : f"{rv:.3f}",
+        "average_fractal_dim" : f"{afd:.3f}",
+        "average_num_projections" : f"{anp:.3f}"
     }
 
     return Averages
