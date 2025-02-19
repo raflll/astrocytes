@@ -1,6 +1,5 @@
 from preprocessing import *
 from postprocessing import *
-from charts import *
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -57,10 +56,12 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
     print(f"Found {len(image_paths)} images to process")
 
     # Process images in parallel
-    features = []
+    features = {}
     with ThreadPoolExecutor() as executor:
         results = executor.map(lambda args: process_image(*args), image_paths)
-        features.extend(results)
+
+    for file_path, r in results:
+        features[file_path] = r
 
     return features
 
@@ -80,13 +81,9 @@ if __name__ == "__main__":
         binarized_path = "binarized_images"
         skeleton_path = "skeletonized_images"
         visuals = False
-        show_charts = True
 
         setup_extract_features(skeleton_path, binarized_path, input_path, features, visuals)
         print("Features extracted to extracted_features")
-
-        if show_charts:
-            charts()
 
     else:
         print("Processing failed. Please check the input path and try again.")

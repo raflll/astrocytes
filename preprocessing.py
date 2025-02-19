@@ -20,9 +20,10 @@ def process_image(file_path, binarized_dir, skeleton_dir):
     binarize_image(str(file_path), str(binarized_path))
 
     # Apply skeletonization and return features
+    # TODO: split skeletonization and feature extraction methods
     features = apply_skeletonization(str(binarized_path), str(skeleton_path))
 
-    return features
+    return str(file_path.name), features
 
 def binarize_image(image_path, output_path):
     SIZE_FILTER = 75 # Lower if we are not detecting small cells, raise if we are getting noise
@@ -176,6 +177,7 @@ def apply_skeletonization(binarized_file, skeletonized_file):
                                                "total_skeleton_length": 0, "area": 0, "perimeter": 0, "roundness": 0}]
 
 def process_astrocyte(label, labels, pruned_complete_skeleton):
+    # TODO: create documentation for how each of the features are calculated
     # Extract mask of astrocyte
     astrocyte_mask = (labels == label).astype(np.uint8) * 255
 
@@ -200,13 +202,26 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
         contours, _ = cv2.findContours(astrocyte_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         perimeter = cv2.arcLength(contours[0], True) if len(contours) > 0 else 0
 
+        num_projs2, proj_lengths, avg_proj_length, max_proj_length = analyze_projections(individual_skeleton)
+
+        if num_projs2 > 0:
+            fractal_dim = calculate_fractal_dimension(astrocyte_mask) # see function
+        else:
+            fractal_dim = 0 # astrocyte with no projections is not fractal, so FD does not apply
+
+        if fractal_dim > 1.6: # function returned large fractal dimension for small, low-res images, so getting rid of them
+            fractal_dim = -1
+
+
         # Collect features for this astrocyte
         features = {
             "object_label": label,
             "num_branches": len(skeleton_data) if len(skeleton_data) > 0 else 0,
+            "num_projections" : num_projs2,
             "branch_lengths": skeleton_data['branch-distance'].tolist() if len(skeleton_data) > 0 else [],
             "total_skeleton_length": sum(skeleton_data['branch-distance']) if len(skeleton_data) > 0 else 0,
             "area": np.sum(astrocyte_mask > 0),
+            "fractal_dim": fractal_dim,
             "perimeter": perimeter,
             "circularity": (4 * np.pi * np.sum(astrocyte_mask > 0)) / (perimeter ** 2) if perimeter > 0 else 0,
             "roundness": perimeter**2 / (4 * math.pi * np.sum(astrocyte_mask > 0))
@@ -216,5 +231,47 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
         return features, (individual_skeleton * 255).astype(np.uint8)
 
     except Exception as e:
-        print(f"Warning: Error processing label {label}: {str(e)}")
+        # print(f"Warning: Error processing label {label}: {str(e)}")
         return None, None
+
+def analyze_projections(skeleton_component):
+
+    segments, objs = pcv.morphology.segment_skeleton(skel_img=skeleton_component)
+
+    # segment sort seems pretty accurate, run debug to visualize
+    # pcv.params.debug = "plot"
+    projection_objs, body_objs = pcv.morphology.segment_sort(skel_img=skeleton_component,
+                                                  objects=objs)
+    # NUMBER OF PROJECTIONS feature
+    num_projs = len(projection_objs)
+
+    # getting ALL PROJECTION LENGTHS feature
+    pcv.params.sample_label = 'astrocyte'
+    labeled_path_img = pcv.morphology.segment_path_length(segmented_img=segments, objects=projection_objs) # objs must be projections only
+    proj_lengths = pcv.outputs.observations['astrocyte']['segment_path_length']['value']
+
+    # AVG/MAX PROJECTION LENGTHS FEATURE
+    avg_proj_length = np.mean(proj_lengths) if proj_lengths else 0
+    max_proj_length = np.max(proj_lengths) if proj_lengths else 0
+
+    return num_projs, proj_lengths, avg_proj_length, max_proj_length
+
+def calculate_fractal_dimension(skeleton_img, min_box=1, max_box=None):
+    # Computing fractal dimension w box counting, found to be best method
+    if max_box is None:
+        max_box = min(skeleton_img.shape) // 2 # max box size is half the image, following convention
+
+    sizes = np.logspace(np.log10(min_box), np.log10(max_box), num=10, dtype=int)
+    counts = np.array([boxcount(skeleton_img, s) for s in sizes if s > 0])
+    counts = counts
+
+    coeffs = np.polyfit(np.log(sizes[:len(counts)]), np.log(counts), 1)
+    return -coeffs[0] * 1.3 # Negative slope is fractal dimension, had to inflate
+
+def boxcount(skeleton_img, k):
+    # Count non-empty boxes of size k in binary image Z (box counting method)
+    S = np.add.reduceat(
+        np.add.reduceat(skeleton_img, np.arange(0, skeleton_img.shape[0], k), axis=0),
+        np.arange(0, skeleton_img.shape[1], k), axis=1
+    )
+    return np.count_nonzero(S)

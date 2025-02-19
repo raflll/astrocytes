@@ -37,8 +37,6 @@ high_res_std = pd.DataFrame({k: v[1] for k, v in high_res_data.items()})
 low_res_df = pd.DataFrame({k: v[0] for k, v in low_res_data.items()})
 low_res_std = pd.DataFrame({k: v[1] for k, v in low_res_data.items()})
 
-import os
-
 # Create the 'charts' directory if it does not exist
 charts_dir = "charts"
 os.makedirs(charts_dir, exist_ok=True)
@@ -60,7 +58,7 @@ for feature in high_res_df.index:
     # Save the plot
     plot_path = os.path.join(charts_dir, f"{feature}.png")
     plt.savefig(plot_path)
-    plt.close()
+    plt.show()
 
 # Confirm the saved files
 os.listdir(charts_dir)
