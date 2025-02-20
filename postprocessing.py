@@ -113,11 +113,11 @@ def save_features_to_csv(subfolder_features):
             print(f"Saved features for {subfolder} to {csv_filename}")
 
 def get_features(features, image_path):
-    # TODO: create documentation for how each of the features are calculated
     # Now features is a dictionary and image_path is the key
     if image_path not in features:
         return None
 
+    # Get specific features for given image
     astrocyte_features = features[image_path]
 
     Totals = {

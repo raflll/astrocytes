@@ -10,18 +10,21 @@ from pathlib import Path
 import math
 import skimage as ski
 from scipy.ndimage import label
-from concurrent.futures import ThreadPoolExecutor
+import copy
 
 def process_image(file_path, binarized_dir, skeleton_dir):
+    # Make strings from the combined paths
     binarized_path = binarized_dir / file_path.name
     skeleton_path = skeleton_dir / file_path.name
 
     # Binarize image
     binarize_image(str(file_path), str(binarized_path))
 
-    # Apply skeletonization and return features
-    # TODO: split skeletonization and feature extraction methods
-    features = apply_skeletonization(str(binarized_path), str(skeleton_path))
+    # Apply skeletonization
+    pruned_skeleton = apply_skeletonization(str(binarized_path), str(skeleton_path))
+
+    # Extract features
+    features = extract_all_features(str(binarized_path), pruned_skeleton)
 
     return str(file_path.name), features
 
@@ -133,6 +136,7 @@ def binarize_image_new(image_path, output_path):
 
     return output_mask
 
+
 def apply_skeletonization(binarized_file, skeletonized_file):
     PRUNE_SIZE = 3
 
@@ -140,37 +144,37 @@ def apply_skeletonization(binarized_file, skeletonized_file):
     img = cv2.imread(binarized_file, cv2.IMREAD_GRAYSCALE)
     binary_img = img.astype(np.uint8)
 
-    # Run connected componenets
-    num_labels, labels = cv2.connectedComponents(binary_img)
-
-    # Create an empty image for all skeletons
-    all_skeletons = np.zeros_like(binary_img)
-
+    # Skeletonize and then prune image
     complete_skeleton = pcv.morphology.skeletonize(mask=binary_img)
     pruned_complete_skeleton = pcv.morphology.prune(skel_img=complete_skeleton, size=PRUNE_SIZE)
 
+    savable_pruned_skeleton = (pruned_complete_skeleton[0] > 0).astype(np.uint8) * 255
+
+    # Save to skeletonized file and return pruned skeleton
+    cv2.imwrite(skeletonized_file, savable_pruned_skeleton)
+    return pruned_complete_skeleton
+
+
+def extract_all_features(binarized_file, pruned_complete_skeleton):
+    # load binarized image and convert to np.uint8
+    img = cv2.imread(binarized_file, cv2.IMREAD_GRAYSCALE)
+    binary_img = img.astype(np.uint8)
+
+    # Run connected componenets
+    num_labels, labels = cv2.connectedComponents(binary_img)
+
+    # Make a list of all the labels
     labels_list = list(range(1, num_labels))  # Start from 1 to skip background
-    all_features = []
-    all_individual_skeletons = []
     results = []
+    all_features = []
 
-    # Use ThreadPoolExecutor to parallelize feature extraction
+    # Add the features from each feature to results
     for label in labels_list:
-        results.append(process_astrocyte(label, labels, pruned_complete_skeleton))
+        results.append((process_astrocyte(label, labels, pruned_complete_skeleton)))
 
-    # Process results: collect features and merge skeletons
-    for feature, skeleton in results:
-        if feature is not None:
-            all_features.append(feature)
-        if skeleton is not None:
-            all_individual_skeletons.append(skeleton)
-
-    # Merge all individual skeletons into all_skeletons
-    for skeleton in all_individual_skeletons:
-        all_skeletons |= skeleton
-
-    # Save complete skeleton image
-    cv2.imwrite(skeletonized_file, all_skeletons)
+    # Add reults to all features
+    for r in results:
+        if not r is None: all_features.append(r)
 
     print(f"Processed: {binarized_file}")
 
@@ -179,12 +183,11 @@ def apply_skeletonization(binarized_file, skeletonized_file):
             "projection_lengths": [], "num_neighbors" : 0, "length_width_ratio" : 0}]
 
 def process_astrocyte(label, labels, pruned_complete_skeleton):
-    # TODO: create documentation for how each of the features are calculated
     # Extract mask of astrocyte
     astrocyte_mask = (labels == label).astype(np.uint8) * 255
 
     if np.sum(astrocyte_mask) == 0:
-        return None, None  # Skip empty masks
+        return None # Skip empty masks
 
     # Skeletonize individual astrocyte
     individual_skeleton = pruned_complete_skeleton[0] & (astrocyte_mask > 0)
@@ -193,7 +196,7 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
     skeleton_uint8 = (individual_skeleton > 0).astype(np.uint8) * 255
 
     if np.sum(skeleton_uint8) == 0:
-        return None, None  # Skip empty skeletons
+        return None  # Skip empty skeletons
 
     try:
         # Feature extraction
@@ -246,11 +249,11 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
         }
 
         # Return both features and the pruned skeleton
-        return features, (individual_skeleton * 255).astype(np.uint8)
+        return features
 
     except Exception as e:
         # print(f"Warning: Error processing label {label}: {str(e)}")
-        return None, None
+        return None
 
 def analyze_projections(skeleton_component):
 
