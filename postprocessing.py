@@ -59,24 +59,6 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
             # Count components
             num_labels, labels = cv2.connectedComponents(binarized_image)
 
-            # Visualization code (unchanged)
-            plt.figure(figsize=(10, 5))
-            data_image = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
-            binarized_image = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
-
-            blended = blend(binarized_image, skeleton_image)
-            rectangle(binarized_image, labels, num_labels)
-
-            plt.subplot(1, 2, 2)
-            plt.imshow(data_image, cmap='gray')
-            plt.title(f"Data: {image_filename}")
-            plt.axis("off")
-
-            plt.subplot(1, 2, 1)
-            plt.imshow(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB))
-            plt.title(f"Astrocyte Count: {num_labels - 1}")
-            plt.axis("off")
-
             # Get features and store them
             feature_stats = get_features(features, image_filename)
             if feature_stats:
@@ -89,8 +71,28 @@ def extract_features(skeleton_images, binarized_images, data_subfolder_path, fea
 
                 # Add features to the appropriate subfolder list
                 subfolder_features[subfolder].append(feature_stats)
-            if visual: plt.show()
-            else: plt.close()
+
+            # Visualization code
+            if visual:
+                plt.figure(figsize=(10, 5))
+                data_image = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
+                binarized_image = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
+
+                blended = blend(binarized_image, skeleton_image)
+                rectangle(binarized_image, labels, num_labels)
+
+                plt.subplot(1, 2, 2)
+                plt.imshow(data_image, cmap='gray')
+                plt.title(f"Data: {image_filename}")
+                plt.axis("off")
+
+                plt.subplot(1, 2, 1)
+                plt.imshow(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB))
+                plt.title(f"Astrocyte Count: {num_labels - 1}")
+                plt.axis("off")
+
+                plt.show()
+
         else:
             print(f"Matching file not found in data for: {image_filename}")
     # Save features to CSV files for each subfolder
