@@ -11,6 +11,9 @@ from scipy import ndimage
 from skimage import feature
 import skimage.filters as filters
 from scipy.ndimage import label
+from matplotlib.gridspec import GridSpec
+import matplotlib.patches as patches
+from scipy.ndimage import gaussian_filter
 
 
 
@@ -18,7 +21,6 @@ def get_tifs():
     return sorted([os.path.join(input_dir, file) for file in os.listdir(input_dir) if file.endswith(".TIFF") or file.endswith(".tiff")])
 
 def binarize_justin(img):
-    # TODO: Make SIZE_FILTER dynamic depending on the image? I'm not sure if this is possible or necessary
     SIZE_FILTER = 75 # Lower if we are not detecting small cells, raise if we are getting noise
 
     # apply unsharp mask filter
@@ -276,34 +278,153 @@ def analyze_image_histogram(image):
     
     return
 
+def preprocess_images(images):
+    """Preprocess all images and their binary versions"""
+    processed = []
+    for img in images:
+        # Create enhanced version
+        enhanced = np.clip(img.astype(np.int32) * 5, 0, 255).astype(np.uint8)
+        # Create binary versions
+        binary_justin = binarize_justin(img)
+        binary_new = binarize_new_1(img)
+        # Store all versions
+        processed.append({
+            'enhanced': enhanced,
+            'binary_justin': binary_justin,
+            'binary_new': binary_new
+        })
+    return processed
+
+def setup_figure(n_images):
+    """Setup the figure with both grid and hover areas"""
+    grid_size = int(np.ceil(np.sqrt(n_images)))
+    fig = plt.figure(figsize=(15, 10))
+    
+    # Create main GridSpec
+    gs = GridSpec(1, 1)
+    
+    # Create hover area GridSpec
+    hover_gs = GridSpec(1, 3, wspace=0.3)
+    
+    # Create hover axes
+    hover_axes = [fig.add_subplot(hover_gs[0, i]) for i in range(3)]
+    for ax in hover_axes:
+        ax.set_visible(False)
+        ax.axis('off')
+    
+    # Calculate grid layout
+    cols = grid_size
+    rows = (n_images - 1) // cols + 1
+    
+    return fig, hover_axes, gs[0], (rows, cols)
+
+def create_image_grid(grid_gs, processed_images, grid_dims):
+    """Create the main image grid"""
+    rows, cols = grid_dims
+    axes_info = []
+    
+    for idx, img_data in enumerate(processed_images):
+        row = idx // cols
+        col = idx % cols
+        
+        # Create subplot in the grid
+        ax = plt.subplot(rows, cols, idx + 1)
+        ax.imshow(img_data['enhanced'], cmap='gray', vmin=0, vmax=255)
+        ax.axis('off')
+        
+        # Store axis information
+        axes_info.append({
+            'axis': ax,
+            'index': idx
+        })
+    
+    return axes_info
+
+def update_hover_display(hover_axes, processed_images, index, visible=True):
+    """Update the hover display area"""
+    titles = ['Original', 'Binarized (Justin)', 'Binarized (New)']
+    images = [
+        processed_images[index]['enhanced'],
+        processed_images[index]['binary_justin'],
+        processed_images[index]['binary_new']
+    ] if visible else [None, None, None]
+    
+    for ax, img, title in zip(hover_axes, images, titles):
+        ax.clear()
+        if visible and img is not None:
+            ax.imshow(img, cmap='gray', vmin=0, vmax=255)
+            ax.set_title(title, fontsize=12, pad=10)
+        ax.set_visible(visible)
+        ax.axis('off')
+    
+    plt.draw()
+
+def handle_hover(event, hover_axes, processed_images, axes_info, current_hover, fig):
+    """Handle hover events"""
+    if event.inaxes:
+        # Find if we're hovering over an image in the grid
+        for info in axes_info:
+            if event.inaxes == info['axis']:
+                if current_hover != info['index']:
+                    # Create frosted pane if it doesn't exist
+                    if not hasattr(fig, 'frost'):
+                        # Generate frosted pane
+                        frost = np.random.random((fig.canvas.get_width_height()[::-1] + (3,))) * 255
+                        frost = gaussian_filter(frost, sigma=10)
+                        frost = (frost * 0.5).astype(np.uint8)
+                        fig.frost = fig.add_axes([0, 0, 1, 1], zorder=10)
+                        fig.frost.imshow(frost, extent=[0, 1, 0, 1], transform=fig.transFigure, alpha=0.7)
+                        fig.frost.axis('off')
+                    
+                    # Show frosted pane and hover images
+                    fig.frost.set_visible(True)
+                    for ax in hover_axes:
+                        ax.set_zorder(20)
+                        ax.set_visible(True)
+                    
+                    # Update hover display
+                    update_hover_display(hover_axes, processed_images, info['index'], True)
+                    return info['index']
+                else:
+                    # Keep frosted pane and hover images visible while hovering
+                    return current_hover
+        
+        # Check if we're hovering over the hover display
+        if event.inaxes in hover_axes:
+            return current_hover
+    
+    # If we're not over any relevant axes, hide the hover display and frosted pane
+    if current_hover is not None:
+        if hasattr(fig, 'frost'):
+            fig.frost.set_visible(False)
+        update_hover_display(hover_axes, processed_images, current_hover, False)
+    return None
+
+def display_interactive_images(images):
+    # Preprocess all images
+    processed_images = preprocess_images(images)
+    
+    # Setup the figure and axes
+    fig, hover_axes, grid_gs, grid_dims = setup_figure(len(images))
+    
+    # Create the image grid
+    axes_info = create_image_grid(grid_gs, processed_images, grid_dims)
+    
+    # Initialize hover state
+    current_hover = None
+    
+    # Create hover event handler
+    def on_hover(event):
+        nonlocal current_hover
+        current_hover = handle_hover(event, hover_axes, processed_images, axes_info, current_hover, fig)
+    
+    # Connect event handler
+    fig.canvas.mpl_connect('motion_notify_event', on_hover)
+    
+    plt.show()
+
+
 input_dir = 'test'
 images = get_tifs()
-images = [cv2.imread(img, cv2.IMREAD_GRAYSCALE) for img in images][2:4]
-# analyze_image_histogram(images[1])
-
-# Create the plot
-fig, axes = plt.subplots(2, 3, figsize=(20, 10))
-plt.subplots_adjust(hspace=0, wspace=0.1) 
-
-# Set column titles
-axes[0, 0].set_title('Original Images')
-axes[0, 1].set_title('Binarized Images Justin')
-axes[0, 2].set_title('Binarized Images New')
-
-for i, image in enumerate(images):
-    # analyze_image_histogram(image)
-    # Original image
-    axes[i, 0].imshow(np.clip(image.astype(np.int32) * 5, 0, 255).astype(np.uint8), cmap='gray', vmin=0, vmax=255)
-    axes[i, 0].axis('off')
-
-    # Binarized image old
-    bin_image_old = binarize_justin(image)
-    axes[i, 1].imshow(bin_image_old, cmap='gray', vmin=0, vmax=255)
-    axes[i, 1].axis('off')
-
-    # Binarized image new
-    bin_image_new = binarize_new_1(image)
-    axes[i, 2].imshow(bin_image_new, cmap='gray', vmin=0, vmax=255)
-    axes[i, 2].axis('off')
-
-plt.show()
+images = [cv2.imread(img, cv2.IMREAD_GRAYSCALE) for img in images]
+display_interactive_images(images)
