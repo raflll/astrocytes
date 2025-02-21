@@ -1,6 +1,10 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+import shap
 
 def charts(visuals):
     # Load the data
@@ -66,3 +70,4 @@ def charts(visuals):
 
     # Confirm the saved files
     os.listdir(charts_dir)
+
