@@ -3,6 +3,7 @@ import numpy as np
 from plantcv import plantcv as pcv
 import porespy as porespy
 from scipy.stats import linregress
+from skan import Skeleton, summarize
 
 
 def extract_features(binarized_img, skeleton_pruned, image_name=None):
@@ -64,29 +65,48 @@ def extract_features(binarized_img, skeleton_pruned, image_name=None):
         # cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
         # cropped_mask = cv2.bitwise_and(component_mask, component_mask, mask=mask)
         if num_projs2 > 0:
-            fractal_dim = calculate_fractal_dimension(cropped_mask) # see function
+            try:
+                fractal_dim = calculate_fractal_dimension(cropped_mask) # see function
+            except:
+                fractal_dim = -1
         else:
             fractal_dim = 0 # astrocyte with no projections is not fractal, so FD does not apply
 
-        if fractal_dim > 1.6: # function returned large fractal dimension for small, low-res images, so getting rid of them
+        if fractal_dim > 1.6: # handling cases where fractal dimension is too large (should be 0 cases)
             fractal_dim = -1
-
         fractal_dims.append(fractal_dim) # testing purposes
+
+        # SKAN SUMMARIZE features (branch feats, nodes, edges, euclidean distance)
+        component_skeleton = (component_skeleton > 0).astype(np.uint8)
+        if np.sum(component_skeleton) == 0:
+            skel_summarized = None
+        else:
+            try:
+                skel_summarized = summarize(Skeleton(component_skeleton), separator='-')
+            except ValueError:
+                skel_summarized = None
 
         features.append({
             'image_name': image_name,
-            'component': label,
+            'astrocyte': label,
             'area': area,
             'perimeter': perimeter,
-            'num_projections': num_projections,
-            'num_projections_v2': num_projs2,
-            'projection_lengths': proj_lengths,
+            # 'num_projections': num_projections,
+            'num_projections': num_projs2,
+            # 'projection_lengths': proj_lengths,
             'avg_projection_length': avg_proj_length,
             'max_projection_length': max_proj_length,
             'circularity': circularity,
             'neighbors': num_neighbors,
             'length_width_ratio': length_width_ratio,
             'fractal_dim': fractal_dim,
+            # 'branch_lengths': skel_summarized["branch-distance"].tolist() if skel_summarized else [],
+            'total_branch_length': skel_summarized["branch-distance"].sum() if skel_summarized is not None else 0,
+            'avg_branch_length': skel_summarized["branch-distance"].mean() if skel_summarized is not None else 0,
+            'max_branch_length': skel_summarized["branch-distance"].max() if skel_summarized is not None else 0,
+            'num_nodes': skel_summarized["node-id-src"].nunique() + skel_summarized["node-id-dst"].nunique() if skel_summarized is not None else 0,
+            'num_edges': len(skel_summarized) if skel_summarized is not None else 0,
+            'avg_euclidean_dist': skel_summarized["euclidean-distance"].mean() if skel_summarized is not None else 0,
             'mask': component_mask
         })
 
@@ -144,36 +164,3 @@ def calculate_fractal_dimension(skeleton_img, min_box=1, max_box=None):
 
     coeffs = np.polyfit(np.log(sizes[:len(counts)]), np.log(counts), 1)
     return -coeffs[0] * 1.3 # Negative slope is fractal dimension, had to inflate
-
-# old fractal dimension logic, porespy boxcount did not work for small images:
-# def calculate_fractal_dimension(binarized_img_cropped):
-#     # boxcount function links:
-#     # function overview: https://porespy.org/modules/generated/generated/porespy.metrics.boxcount.html#porespy.metrics.boxcount
-#     # implementation: https://porespy.org/examples/metrics/tutorials/computing_fractal_dim.html
-#     # source code: https://porespy.org/_modules/porespy/metrics/_funcs.html
-#     binary_image = (binarized_img_cropped > 0).astype(np.uint8)
-
-#     try:
-#         # Consider optional binning for boxcount function? probably redundant because of way porespy boxcount uses bins
-#         skel_x, skel_y, skel_width, skel_height = cv2.boundingRect(binarized_img_cropped)
-#         num_bins = max(10, min(skel_width, skel_height) // 10)
-#         # print(num_bins)
-
-#         result = porespy.metrics.boxcount(binary_image, bins=10)
-#         sizes = result.size
-#         counts = result.count
-#         # print(result.slope)
-#         # fractal_dimension = np.mean(result.slope) # not the best approach, see 3rd link above
-
-#         # FRACTAL DIMENSION feature - based on algorithm
-#         log_sizes = np.log(sizes)
-#         log_counts = np.log(counts)
-#         slope, _, _, _, _ = linregress(log_sizes, log_counts)
-
-#         fractal_dimension = -slope
-
-#         return fractal_dimension
-
-#     except Exception as e: # Doesnt get called often, but could debug
-#         print(f"Error in boxcount: {e}")
-#         return -1
