@@ -4,44 +4,50 @@ from binarize_and_skeletonize import *
 from extract_features import *
 from utils import save_image, save_dataframe
 
-DATA_DIR = "../data"
-OUTPUT_BINARIZED = "../binarized_images"
-OUTPUT_SKELETONIZED = "../skeletonized_images"
-OUTPUT_FEATURES = "../features"
+# os.chdir('C:\\Users\\nikhi\\OneDrive\\Documents\\Bonsai\\AstrocyteMorph\\scripts')
 
-FOLDERS = ["control", "treatment1", "treatment2"]
+def main():
+    DATA_DIR = "../data"
+    OUTPUT_BINARIZED = "../binarized_images"
+    OUTPUT_SKELETONIZED = "../skeletonized_images"
+    OUTPUT_FEATURES = "../features"
 
-# Ensure output directories for binarized and skeletonized images exist
-for folder in FOLDERS:
-    os.makedirs(os.path.join(OUTPUT_BINARIZED, folder), exist_ok=True)
-    os.makedirs(os.path.join(OUTPUT_SKELETONIZED, folder), exist_ok=True)
-    
-# Ensure output directory for features exists
-os.makedirs(OUTPUT_FEATURES, exist_ok=True)
+    FOLDERS = ["control", "treatment1", "treatment2"]
 
-for folder in FOLDERS:
-    input_folder = os.path.join(DATA_DIR, folder)
-    image_files = [f for f in os.listdir(input_folder) if f.endswith(".tiff")]
+    # Ensure output directories for binarized and skeletonized images exist
+    for folder in FOLDERS:
+        os.makedirs(os.path.join(OUTPUT_BINARIZED, folder), exist_ok=True)
+        os.makedirs(os.path.join(OUTPUT_SKELETONIZED, folder), exist_ok=True)
+        
+    # Ensure output directory for features exists
+    os.makedirs(OUTPUT_FEATURES, exist_ok=True)
 
-    all_features = []
+    for folder in FOLDERS:
+        input_folder = os.path.join(DATA_DIR, folder)
+        image_files = [f for f in os.listdir(input_folder) if f.endswith(".tiff")]
 
-    for image_name in image_files:
-        input_path = os.path.join(input_folder, image_name)
+        all_features = []
 
-        # Binarize image
-        original_img, binarized_img = binarize(input_path)
-        save_image(binarized_img, os.path.join(OUTPUT_BINARIZED, folder, f"{image_name}")) # see utils
+        for image_name in image_files:
+            input_path = os.path.join(input_folder, image_name)
 
-        # Skeletonize image
-        skeletonized_img = skeletonize_and_prune(original_img, binarized_img, prune_size=10)
-        save_image(skeletonized_img, os.path.join(OUTPUT_SKELETONIZED, folder, f"{image_name}"))
+            # Binarize image, can toggle method here
+            original_img, binarized_img = binarize(input_path, method="new")
+            save_image(binarized_img, os.path.join(OUTPUT_BINARIZED, folder, f"{image_name}"))
 
-        # Extract features for each component in image
-        features = extract_features(binarized_img, skeletonized_img, image_name=image_name)
-        all_features.extend(features)
+            # Skeletonize image
+            skeletonized_img = skeletonize_and_prune(original_img, binarized_img, prune_size=10)
+            save_image(skeletonized_img, os.path.join(OUTPUT_SKELETONIZED, folder, f"{image_name}"))
 
-    # Store all features in one df (see utils)
-    df = pd.DataFrame(all_features)
-    save_dataframe(df, os.path.join(OUTPUT_FEATURES, f"{folder}_features.csv"))
+            # Extract features and pass the image name
+            features = extract_features(binarized_img, skeletonized_img, image_name=image_name)
+            all_features.extend(features)
 
-print("Processing complete.")
+        # Convert to DataFrame and save
+        df = pd.DataFrame(all_features)
+        save_dataframe(df, os.path.join(OUTPUT_FEATURES, f"{folder}_features.csv"))
+
+    print("Processing complete.")
+
+if __name__ == "__main__":
+    main()
