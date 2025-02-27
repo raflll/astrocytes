@@ -2,7 +2,7 @@ from frontend import *
 
 if __name__ == "__main__":
 
-    GUI = False
+    GUI = True
     # If GUI is enabled, it will run the front end
     if GUI:
         app = QApplication(sys.argv)
