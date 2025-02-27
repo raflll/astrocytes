@@ -1,82 +1,222 @@
-from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
-import seaborn as sns
-import numpy as np
-
-# Reload the newly uploaded datasets
-updated_file_paths = {
-    "Phenotype_2": "extracted_features/Phenotype 2_features.csv",
-    "Phenotype_1": "extracted_features/Phenotype 1_features.csv",
-    "Control": "extracted_features/Control_features.csv",
-}
-
-# Load the new datasets
-dataframes = {key: pd.read_csv(path) for key, path in updated_file_paths.items()}
-
-# Assign labels to each dataset
-dataframes["Phenotype_1"]["label"] = 1
-dataframes["Phenotype_2"]["label"] = 2
-dataframes["Control"]["label"] = 0
-
-# Combine datasets
-df_combined = pd.concat(dataframes.values(), ignore_index=True)
-
-# Drop non-numeric column (if exists)
-if "image_filename" in df_combined.columns:
-    df_combined = df_combined.drop(columns=["image_filename"])
-
-# Separate features and target label
-X_updated = df_combined.drop(columns=["label"])
-y_updated = df_combined["label"]
-
-# Train Random Forest model with updated features
-rf_classifier_updated = RandomForestClassifier(n_estimators=200, max_depth=10, min_samples_split=5, min_samples_leaf=2, max_features='sqrt', random_state=42)
-rf_classifier_updated.fit(X_updated, y_updated)
-
-# Compute feature importance
-feature_importances_updated = rf_classifier_updated.feature_importances_
-
-# Create a DataFrame for visualization
-importance_df_updated = pd.DataFrame({
-    "Feature": X_updated.columns,
-    "Importance": feature_importances_updated
-}).sort_values(by="Importance", ascending=False)
-
-# Plot feature importances
 import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression, RidgeClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+import numpy as np
+import shap
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
-plt.figure(figsize=(10, 5))
-plt.barh(importance_df_updated["Feature"], importance_df_updated["Importance"], align="center")
-plt.xlabel("Feature Importance")
-plt.ylabel("Feature")
-plt.title("Feature Importance in Updated Random Forest Classifier")
-plt.gca().invert_yaxis()
-plt.show()
+def load_data(file_paths):
+    dataframes = {key: pd.read_csv(path) for key, path in file_paths.items()}
+    dataframes["treatment_1"]["label"] = 1
+    dataframes["treatment_2"]["label"] = 2
+    dataframes["control"]["label"] = 0
+    df = pd.concat(dataframes.values(), ignore_index=True)
+    df = df[df["file_name"].str.contains("-ch2")]
+    # df = df[df["num_projections"] != 0] # optional, filtering out no projections
+    return df
 
+def preprocess_data(df):
+    # First, remove non-numeric columns and save label column
+    X = df.drop(columns=["file_name", "object_label", "label"])
 
-# Compute correlation matrix
-correlation_matrix = df_combined.corr()
+    # Handle list columns by converting them to string length (if they exist)
+    for col in X.columns:
+        if X[col].apply(lambda x: isinstance(x, list)).any():
+            X[col] = X[col].apply(lambda x: len(x) if isinstance(x, list) else x)
 
-# Mask for upper triangle
-mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
+    # Ensure all columns are numeric
+    numeric_cols = X.select_dtypes(include=['number']).columns
+    X = X[numeric_cols]
 
-# Plot heatmap
-plt.figure(figsize=(10, 8))
-# Draw the heatmap with the mask and correct aspect ratio
-sns.heatmap(
-    correlation_matrix,
-    mask=mask,
-    annot=True,
-    cmap="coolwarm",
-    fmt=".2f",
-    linewidths=0.5,
-    annot_kws={"size": 8}  # Reduce font size for annotations
-)
+    # Get the target variable
+    y = df["label"]
 
-plt.xticks(rotation=45, ha='right', fontsize=6)
-plt.yticks(fontsize=6)
-plt.title("Correlation Matrix of Features")
-plt.show()
+    # Split the data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Display feature importance values
-importance_df_updated
+    # Apply log transformation to numeric columns (prevents errors with string columns)
+    X_train_log = np.log1p(X_train)
+    X_test_log = np.log1p(X_test)
+
+    # Scale the data
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train_log)
+    X_test_scaled = scaler.transform(X_test_log)
+
+    return X, y, X_train_scaled, X_test_scaled, y_train, y_test, X.columns
+
+# trains selected model and returns: accuracy, f1 score, regular feature importance, and shap values
+def train_and_evaluate(model_name, X_train, X_test, y_train, y_test, feature_names):
+    if model_name == "LR":
+        model = LogisticRegression(max_iter=1000)
+    elif model_name == "Ridge":
+        model = RidgeClassifier(alpha=1)
+    elif model_name == "ENet":
+        model = LogisticRegression(penalty='elasticnet', solver='saga', l1_ratio=0.3, max_iter=10000)
+    elif model_name == "RF":
+        model = RandomForestClassifier(n_estimators=200, max_depth=10, min_samples_split=5, min_samples_leaf=2, max_features='sqrt', random_state=42, oob_score=True)
+    else:
+        return "Undefined model", 0, 0, None, None
+
+    # NOTE: these were the columns to drop based on Ethan's binarize (only applicable to Ridge and Logistic Regression)
+    if model_name == "Ridge":
+        drop_cols = ["num_edges", "total_branch_length", "avg_branch_length", "avg_projection_length", "length_width_ratio"]
+    elif model_name == "LR":
+        drop_cols = ["num_edges", "total_branch_length", "avg_branch_length", "avg_projection_length", "length_width_ratio", "circularity"]
+    else:
+        drop_cols = []
+
+    # Filter out columns that don't exist in the dataset
+    drop_cols = [col for col in drop_cols if col in feature_names]
+
+    # Create DataFrames for SHAP analysis
+    X_train_df = pd.DataFrame(X_train, columns=feature_names)
+    X_test_df = pd.DataFrame(X_test, columns=feature_names)
+
+    # Drop specified columns
+    X_train_filtered = X_train_df.drop(columns=drop_cols, errors='ignore')
+    X_test_filtered = X_test_df.drop(columns=drop_cols, errors='ignore')
+
+    # Fit the model
+    model.fit(X_train_filtered, y_train)
+    y_pred = model.predict(X_test_filtered)
+
+    # Calculate metrics
+    accuracy = accuracy_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred, average='weighted')
+
+    # Get feature importance based on model type
+    if hasattr(model, "coef_"):
+        if len(model.coef_.shape) > 1 and model.coef_.shape[0] > 1:
+            # For multi-class models
+            feature_importance = np.mean(np.abs(model.coef_), axis=0)
+        else:
+            # For binary classification
+            feature_importance = model.coef_[0] if model.coef_.shape[0] > 1 else model.coef_
+    else:
+        feature_importance = model.feature_importances_
+
+    try:
+        # Compute SHAP values based on model type
+        if isinstance(model, RandomForestClassifier):
+            # TreeExplainer for Tree-based models
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(X_test_filtered)
+        else:
+            # KernelExplainer for linear models
+            # Limit to 100 background samples for performance
+            background_samples = shap.sample(X_train_filtered, min(100, len(X_train_filtered)))
+
+            if hasattr(model, 'decision_function'):
+                explainer = shap.KernelExplainer(model.decision_function, background_samples)
+            else:
+                # For multi-class models
+                explainer = shap.KernelExplainer(model.predict_proba, background_samples)
+
+            shap_values = explainer.shap_values(X_test_filtered.iloc[:100])  # Limit test samples for performance
+    except Exception as e:
+        print(f"SHAP analysis failed: {str(e)}")
+        shap_values = None
+
+    return accuracy, f1, feature_importance, shap_values
+
+# Computes VIF (Variance Inflation Factor)
+def compute_vif(X):
+    # Only compute VIF for numeric columns
+    X_numeric = X.select_dtypes(include=['number'])
+
+    # Drop columns with zero variance
+    variance = X_numeric.var()
+    cols_to_drop = variance[variance <= 1e-10].index.tolist()
+    X_filtered = X_numeric.drop(columns=cols_to_drop)
+
+    # Compute VIF
+    vif_data = pd.DataFrame()
+    vif_data["Feature"] = X_filtered.columns
+
+    try:
+        vif_data["VIF"] = [variance_inflation_factor(X_filtered.values, i)
+                           for i in range(X_filtered.shape[1])]
+    except Exception as e:
+        print(f"VIF calculation failed: {str(e)}")
+        vif_data["VIF"] = np.nan
+
+    return vif_data
+
+def train_model(model_name, visuals):
+    file_paths = {
+        "treatment_1": "extracted_features/Phenotype 1_features.csv",
+        "treatment_2": "extracted_features/Phenotype 2_features.csv",
+        "control": "extracted_features/Control_features.csv"
+    }
+
+    df = load_data(file_paths)
+
+    X, y, X_train, X_test, y_train, y_test, feature_names = preprocess_data(df)
+
+    # Convert X_train to DataFrame for VIF calculation
+    X_train_df = pd.DataFrame(X_train, columns=feature_names)
+
+    try:
+        vif_df = compute_vif(X_train_df)
+        vif_df = vif_df.sort_values(by="VIF", ascending=False)
+        print("Variance Inflation Factors:")
+        print(vif_df)
+    except Exception as e:
+        print(f"Error computing VIF: {str(e)}")
+
+    try:
+        print(f"\nTraining {model_name} model...")
+        accuracy, f1, feature_importance, shap_values = train_and_evaluate(
+            model_name, X_train, X_test, y_train, y_test, feature_names)
+
+        print(f"Accuracy: {accuracy:.4f}")
+        print(f"F1 Score: {f1:.4f}")
+
+        # Create importance DataFrame
+        importance_df = pd.DataFrame({
+            "Feature": feature_names,
+            "Importance": feature_importance
+        }).sort_values(by="Importance", ascending=False)
+
+        print("\nTop 10 important features:")
+        print(importance_df.head(10))
+
+        # Plotting feature importance
+        plt.figure(figsize=(10, 8))
+        plt.barh(importance_df["Feature"].head(15), importance_df["Importance"].head(15), align="center")
+        plt.xlabel("Feature Importance")
+        plt.ylabel("Feature")
+        plt.title(f"Feature Importance - {model_name}")
+        plt.gca().invert_yaxis()
+        plt.tight_layout()
+        plt.savefig(f"{model_name}_feature_importance.png")
+        if visuals: plt.show()
+
+        # Plot SHAP values if available
+        if shap_values is not None:
+            if isinstance(shap_values, list):
+                # For multi-class models
+                for i, class_values in enumerate(shap_values):
+                    plt.figure(figsize=(10, 8))
+                    shap.summary_plot(class_values, pd.DataFrame(X_test, columns=feature_names),
+                                    show=False, plot_size=(10, 8))
+                    plt.title(f"SHAP values for class {i}")
+                    plt.tight_layout()
+                    plt.savefig(f"{model_name}_shap_class_{i}.png")
+                    if visuals: plt.show()
+            else:
+                # For binary classification or regression
+                plt.figure(figsize=(10, 8))
+                shap.summary_plot(shap_values, pd.DataFrame(X_test, columns=feature_names),
+                                show=False, plot_size=(10, 8))
+                plt.title(f"SHAP values for {model_name}")
+                plt.tight_layout()
+                plt.savefig(f"{model_name}_shap.png")
+                if visuals: plt.show()
+    except Exception as e:
+        print(f"Error during model training and evaluation: {str(e)}")

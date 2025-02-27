@@ -10,6 +10,20 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="/extracted_features/Folder_4_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/extracted_features/Images_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="/extracted_features/Phenotype 1_features.csv">
           <value>
             <Attribute>
@@ -18,6 +32,41 @@
           </value>
         </entry>
         <entry key="/extracted_features/Phenotype 2_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/extracted_features/Phenotype_2_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/extracted_features/Pheontype 2_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/whole_image_features/Control_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/whole_image_features/Phenotype 1_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/whole_image_features/Phenotype 2_features.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

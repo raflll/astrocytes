@@ -13,6 +13,7 @@ from scipy.ndimage import label
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import pandas as pd
 
 def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
     # Convert input path to Path object
@@ -27,8 +28,12 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
     binarized_base = Path("binarized_images")
     skeleton_base = Path("skeletonized_images")
 
+    # Also create directory for extracted features
+    features_dir = Path("extracted_features")
+
     binarized_base.mkdir(exist_ok=True)
     skeleton_base.mkdir(exist_ok=True)
+    features_dir.mkdir(exist_ok=True)
 
     # Collect all image paths
     image_paths = []
@@ -40,7 +45,13 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
         # Process files in subdirectories
         print(f"Found {len(subdirs)} subdirectories. Processing files in subdirectories...")
         for subdir in subdirs:
+            subdir_paths = []
             for file_path in subdir.rglob("*"):
+                # Skip files with "-ch1" in the filename
+                if "-ch1" in file_path.name:
+                    print(f"Skipping ch1 file: {file_path.name}")
+                    continue
+
                 if file_path.suffix.lower() in image_extensions:
                     rel_path = file_path.parent.relative_to(input_path)
                     binarized_dir = binarized_base / rel_path
@@ -49,32 +60,80 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
                     binarized_dir.mkdir(parents=True, exist_ok=True)
                     skeleton_dir.mkdir(parents=True, exist_ok=True)
 
-                    image_paths.append((file_path, binarized_dir, skeleton_dir))
+                    subdir_paths.append((file_path, binarized_dir, skeleton_dir))
+            if subdir_paths:  # Only add if there are actually images
+                image_paths.append(subdir_paths)
     else:
         # Process files in main directory only
         print("No subdirectories found. Processing files in main directory...")
+        main_dir_paths = []
         for file_path in input_path.glob("*"):
+            # Skip files with "-ch1" in the filename
+            if "-ch1" in file_path.name:
+                print(f"Skipping ch1 file: {file_path.name}")
+                continue
+
             if file_path.suffix.lower() in image_extensions:
                 binarized_dir = binarized_base
                 skeleton_dir = skeleton_base
 
-                image_paths.append((file_path, binarized_dir, skeleton_dir))
+                main_dir_paths.append((file_path, binarized_dir, skeleton_dir))
+        if main_dir_paths:  # Only add if there are actually images
+            image_paths.append(main_dir_paths)
 
     if not image_paths:
         print(f"No images found with extensions {image_extensions}")
         return None
 
-    print(f"Found {len(image_paths)} images to process")
+    num_folders = len(image_paths)
+    total_images = sum(len(folder) for folder in image_paths)
+    print(f"Found {total_images} images in {num_folders} folders to process")
 
-    # Process images in parallel
-    features = {}
-    with ThreadPoolExecutor() as executor:
-        results = executor.map(lambda args: process_image(*args), image_paths)
+    all_features = []
+    # Process each folder
+    for folder_idx, folder_paths in enumerate(image_paths):
+        print(f"Processing folder {folder_idx+1}/{num_folders} with {len(folder_paths)} images")
+        folder_features = {}
 
-    for file_path, r in results:
-        features[file_path] = r
+        # Process images in parallel within each folder
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(lambda args: process_image(*args), folder_paths))
 
-    return features
+        # Collect results for this folder
+        for result in results:
+            file_name, features = result
+            folder_features[file_name] = features
+
+        all_features.append(folder_features)
+
+    # Save features to CSV files
+    for f, folder in enumerate(all_features):
+        if f == 0:
+            name = "extracted_features/Control_features.csv"
+        elif f == 1:
+            name = "extracted_features/Images_features.csv"
+        elif f == 2:
+            name = "extracted_features/Phenotype 1_features.csv"
+        elif f == 3:
+            name = "extracted_features/Phenotype 2_features.csv"
+        else:
+            name = f"extracted_features/Folder_{f+1}_features.csv"
+
+        # Convert nested dictionaries to DataFrame
+        rows = []
+        for file_name, cell_features_list in folder.items():
+            for i, cell_feature in enumerate(cell_features_list):
+                cell_feature['file_name'] = file_name
+                rows.append(cell_feature)
+
+        if rows:  # Only save if we have data
+            df = pd.DataFrame(rows)
+            save_dataframe(df, name)
+            print(f"Saved features to {name}")
+        else:
+            print(f"No features to save for folder {f}")
+
+
 
 def process_image(file_path, binarized_dir, skeleton_dir):
     # Make strings from the combined paths
@@ -308,8 +367,11 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
             "circularity": (4 * np.pi * np.sum(astrocyte_mask > 0)) / (perimeter ** 2) if perimeter > 0 else 0,
             "roundness": perimeter**2 / (4 * math.pi * np.sum(astrocyte_mask > 0)),
             "projection_lengths": proj_lengths,
-            "num_neighbors" : num_neighbors,
-            "length_width_ratio" : length_width_ratio
+            "avg_projection_length": sum(proj_lengths) / len(proj_lengths),
+            "max_projection_length": max(proj_lengths),
+            "neighbors" : num_neighbors,
+            "length_width_ratio" : length_width_ratio,
+            # "mask" : astrocyte_mask
         }
 
         # Return both features and the pruned skeleton
@@ -359,3 +421,7 @@ def boxcount(skeleton_img, k):
         np.arange(0, skeleton_img.shape[1], k), axis=1
     )
     return np.count_nonzero(S)
+
+def save_dataframe(df, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    df.to_csv(path, index=False)
