@@ -63,49 +63,35 @@ class FeatureVisualizationThread(QThread):
         # Get all available feature CSV files
         feature_files = []
         features_dir = "extracted_features"
-        if os.path.exists(features_dir):
+        images_file = os.path.join(features_dir, "Images_features.csv")
+
+        if not os.path.exists(images_file):
+            # Try to find any file that might contain "Image" in its name
             feature_files = [os.path.join(features_dir, f) for f in os.listdir(features_dir)
-                            if f.endswith('_features.csv')]
+                            if os.path.isfile(os.path.join(features_dir, f)) and
+                            ('Image' in f or 'image' in f) and f.endswith('_features.csv')]
+            if feature_files:
+                images_file = feature_files[0]
+            else:
+                self.progress_signal.emit("Images feature file not found!")
+                return
 
-        if not feature_files:
-            self.progress_signal.emit("No feature files found!")
-            return
-
-        # Randomly select a CSV file
-        selected_file = random.choice(feature_files)
-        self.progress_signal.emit(f"Selected: {os.path.basename(selected_file)}")
+        self.progress_signal.emit(f"Using features from: {os.path.basename(images_file)}")
 
         try:
             # Load the CSV file
-            df = pd.read_csv(selected_file)
+            df = pd.read_csv(images_file)
 
             if df.empty:
                 self.progress_signal.emit("Selected CSV file is empty!")
                 return
 
-            # Group by file_name to get distinct images
-            file_groups = df.groupby('file_name')
-
-            # Select a random image that has features
-            file_names = list(file_groups.groups.keys())
-            if not file_names:
-                self.progress_signal.emit("No valid files found in the CSV!")
-                return
-
-            file_name = random.choice(file_names)
-
-            # Find all objects for this file
-            image_rows = df[df['file_name'] == file_name]
-
-            if image_rows.empty:
-                self.progress_signal.emit(f"No features found for {file_name}!")
-                return
-
-            # Select a random object from this file
-            selected_row = image_rows.sample(1).iloc[0]
+            # Sample a random row from the dataframe
+            selected_row = df.sample(1).iloc[0]
+            file_name = selected_row['file_name']
             object_label = selected_row['object_label']
 
-            self.progress_signal.emit(f"Selected file: {file_name}, object: {object_label}")
+            self.progress_signal.emit(f"Selected image: {file_name}, object: {object_label}")
 
             # Check if we can find the original, skeleton, and binarized images
             data_image_path = self.find_image_file(file_name)
@@ -145,35 +131,37 @@ class FeatureVisualizationThread(QThread):
             # Extract the mask for the selected object
             component_mask = (labels == object_label).astype(np.uint8) * 255
 
-            # Create a colored version of the binarized image for overlay
+            # Apply enhancement to the original image (sharpen and boost contrast)
+            enhanced_data_image = self.enhance_image(data_image)
+
+            # Create colored versions
             binarized_colored = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
-            data_colored = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
+            data_colored_original = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
+
+            # Create enhanced version for visualization
+            enhanced_data_image = self.enhance_image(data_image)
+            enhanced_colored = cv2.cvtColor(enhanced_data_image, cv2.COLOR_GRAY2BGR)
 
             # Get the bounding box for the feature
             x, y, w, h = cv2.boundingRect(component_mask)
 
-            # Create a copy of the skeleton image with a red overlay for the feature
-            skeleton_colored = cv2.cvtColor(skeleton_image, cv2.COLOR_GRAY2BGR)
-            feature_mask = np.zeros_like(skeleton_colored)
-            feature_mask[component_mask > 0] = [0, 0, 255]  # Red overlay
-            blended = cv2.addWeighted(skeleton_colored, 1.0, feature_mask, 0.5, 0)
-
-            # Draw a green rectangle around the feature
-            cv2.rectangle(blended, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-            # Also create a blended image with the binarized and skeleton
+            # First image: Blended skeleton with binarized + bounding box
             blended_skeleton = self.blend_skeleton(binarized_colored, skeleton_image)
+            cv2.rectangle(blended_skeleton, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            # Second image: Unenhanced data with bounding box
+            cv2.rectangle(data_colored_original, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
             # Save temporary images for display
             temp_dir = "temp"
             os.makedirs(temp_dir, exist_ok=True)
 
-            blended_path = os.path.join(temp_dir, "feature_overlay.png")
+            enhanced_path = os.path.join(temp_dir, "enhanced.png")
             original_path = os.path.join(temp_dir, "original.png")
             skeleton_path = os.path.join(temp_dir, "skeleton_overlay.png")
 
-            cv2.imwrite(blended_path, blended)
-            cv2.imwrite(original_path, data_colored)
+            cv2.imwrite(enhanced_path, enhanced_colored)
+            cv2.imwrite(original_path, data_colored_original)
             cv2.imwrite(skeleton_path, blended_skeleton)
 
             # Prepare stats to display
@@ -188,9 +176,9 @@ class FeatureVisualizationThread(QThread):
                 'fractal_dim': selected_row.get('fractal_dim', 'N/A'),
                 'roundness': selected_row.get('roundness', 'N/A'),
                 'total_skeleton_length': selected_row.get('total_skeleton_length', 'N/A'),
-                'feature_overlay_path': blended_path,
-                'original_path': original_path,
                 'skeleton_overlay_path': skeleton_path,
+                'original_path': original_path,
+                'enhanced_path': enhanced_path,
                 'x': x,
                 'y': y,
                 'width': w,
@@ -202,11 +190,8 @@ class FeatureVisualizationThread(QThread):
 
         except Exception as e:
             self.progress_signal.emit(f"Error during visualization: {str(e)}")
-
-    def get_labeled_components(self, binary_image):
-        # Run connected components on the binary image
-        num_labels, labels = cv2.connectedComponents(binary_image)
-        return labels
+            import traceback
+            traceback.print_exc()
 
     def blend_skeleton(self, original, skeleton):
         # Create a copy of the original
@@ -219,7 +204,7 @@ class FeatureVisualizationThread(QThread):
 
     def find_image_file(self, file_name):
         # Look for the file in potential data directories
-        data_dirs = ["data", "data/Control", "data/Images", "data/Phenotype 1", "data/Phenotype 2"]
+        data_dirs = ["data", "data/Images"]
 
         for data_dir in data_dirs:
             if not os.path.exists(data_dir):
@@ -239,9 +224,7 @@ class FeatureVisualizationThread(QThread):
 
     def find_skeleton_file(self, file_name):
         # Look for the file in the skeletonized directory
-        skeleton_dirs = ["skeletonized_images", "skeletonized_images/Control",
-                        "skeletonized_images/Images", "skeletonized_images/Phenotype 1",
-                        "skeletonized_images/Phenotype 2"]
+        skeleton_dirs = ["skeletonized_images", "skeletonized_images/Images",]
 
         for skel_dir in skeleton_dirs:
             if not os.path.exists(skel_dir):
@@ -261,9 +244,7 @@ class FeatureVisualizationThread(QThread):
 
     def find_binarized_file(self, file_name):
         # Look for the file in the binarized directory
-        binary_dirs = ["binarized_images", "binarized_images/Control",
-                      "binarized_images/Images", "binarized_images/Phenotype 1",
-                      "binarized_images/Phenotype 2"]
+        binary_dirs = ["binarized_images", "binarized_images/Images"]
 
         for bin_dir in binary_dirs:
             if not os.path.exists(bin_dir):
@@ -280,6 +261,25 @@ class FeatureVisualizationThread(QThread):
                     return os.path.join(root, file_name)
 
         return None
+
+    def enhance_image(self, image):
+        """Apply sharpening and contrast enhancement to an image"""
+        # Apply unsharp mask for sharpening
+        image = (unsharp_mask(image, radius=20, amount=2) * 255).astype(np.uint8)
+
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) instead of regular histogram equalization
+        # This provides better contrast without the excessive noise amplification
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(image)
+
+        # Apply additional mild contrast stretching
+        min_val = np.percentile(enhanced, 5)  # 5th percentile instead of absolute min
+        max_val = np.percentile(enhanced, 95)  # 95th percentile instead of absolute max
+
+        # Avoid division by zero
+        if max_val > min_val: enhanced = np.clip((enhanced - min_val) * 220 / (max_val - min_val) + 20, 0, 255).astype(np.uint8)
+
+        return enhanced
 
 class ModernUI(QMainWindow):
     def __init__(self):
@@ -674,19 +674,19 @@ class ModernUI(QMainWindow):
         self.viz_layout = QGridLayout(self.viz_display_frame)
 
         # Feature visualization section
-        self.feature_image_label = QLabel("Feature visualization will appear here")
+        self.feature_image_label = QLabel("Binarized with skeleton overlay")
         self.feature_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.feature_image_label.setMinimumHeight(400)
         self.viz_layout.addWidget(self.feature_image_label, 0, 0)
 
-        self.original_image_label = QLabel("Original image will appear here")
+        self.original_image_label = QLabel("Original image")
         self.original_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.original_image_label.setMinimumHeight(400)
         self.viz_layout.addWidget(self.original_image_label, 0, 1)
 
-        self.skeleton_image_label = QLabel("Skeleton overlay will appear here")
+        self.skeleton_image_label = QLabel("Enhanced image")
         self.skeleton_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.skeleton_image_label.setMinimumHeight(400)
@@ -795,27 +795,31 @@ class ModernUI(QMainWindow):
         # Re-enable the button
         self.viz_button.setEnabled(True)
 
+        # Display feature source information more prominently
+        source_info = f"Feature from: {os.path.basename(stats['file_name'])}"
+        self.viz_status_label.setText(source_info)
+
         # Get bounding box coordinates for cropping
         x, y, w, h = stats['x'], stats['y'], stats['width'], stats['height']
         padding = max(100, w//2, h//2)  # Use dynamic padding based on feature size
 
         # Create cropped versions of all images
-        feature_cropped = self.crop_around_feature(stats['feature_overlay_path'], x, y, w, h, padding)
-        original_cropped = self.crop_around_feature(stats['original_path'], x, y, w, h, padding)
         skeleton_cropped = self.crop_around_feature(stats['skeleton_overlay_path'], x, y, w, h, padding)
+        original_cropped = self.crop_around_feature(stats['original_path'], x, y, w, h, padding)
+        enhanced_cropped = self.crop_around_feature(stats['enhanced_path'], x, y, w, h, padding)
 
         # Save the cropped images
         temp_dir = "temp"
-        feature_cropped_path = os.path.join(temp_dir, "feature_overlay_zoomed.png")
-        original_cropped_path = os.path.join(temp_dir, "original_zoomed.png")
         skeleton_cropped_path = os.path.join(temp_dir, "skeleton_overlay_zoomed.png")
+        original_cropped_path = os.path.join(temp_dir, "original_zoomed.png")
+        enhanced_cropped_path = os.path.join(temp_dir, "enhanced_zoomed.png")
 
-        cv2.imwrite(feature_cropped_path, feature_cropped)
-        cv2.imwrite(original_cropped_path, original_cropped)
         cv2.imwrite(skeleton_cropped_path, skeleton_cropped)
+        cv2.imwrite(original_cropped_path, original_cropped)
+        cv2.imwrite(enhanced_cropped_path, enhanced_cropped)
 
-        # Display the feature overlay image
-        pixmap = QPixmap(feature_cropped_path)
+        # Display the skeleton overlay image (in feature_image_label spot)
+        pixmap = QPixmap(skeleton_cropped_path)
         scaled_pixmap = pixmap.scaled(
             min(500, self.feature_image_label.width()),
             min(500, self.feature_image_label.height()),
@@ -836,8 +840,8 @@ class ModernUI(QMainWindow):
         self.original_image_label.setPixmap(scaled_pixmap)
         self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Display the skeleton overlay
-        pixmap = QPixmap(skeleton_cropped_path)
+        # Display the enhanced image (in skeleton_image_label spot)
+        pixmap = QPixmap(enhanced_cropped_path)
         scaled_pixmap = pixmap.scaled(
             min(800, self.skeleton_image_label.width()),
             min(500, self.skeleton_image_label.height()),
@@ -848,7 +852,6 @@ class ModernUI(QMainWindow):
         self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Update statistics
-        # [The rest of the statistics code remains unchanged]
         self.stat_value_labels['file_name_value'].setText(str(stats['file_name']))
         self.stat_value_labels['object_label_value'].setText(str(stats['object_label']))
         self.stat_value_labels['area_value'].setText(str(stats['area']))
