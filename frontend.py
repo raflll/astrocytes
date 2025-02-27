@@ -83,12 +83,29 @@ class FeatureVisualizationThread(QThread):
                 self.progress_signal.emit("Selected CSV file is empty!")
                 return
 
-            # Randomly select a row from the dataframe
-            selected_row = df.sample(1).iloc[0]
+            # Group by file_name to get distinct images
+            file_groups = df.groupby('file_name')
 
-            # Get the file name and object label for this feature
-            file_name = selected_row['file_name']
+            # Select a random image that has features
+            file_names = list(file_groups.groups.keys())
+            if not file_names:
+                self.progress_signal.emit("No valid files found in the CSV!")
+                return
+
+            file_name = random.choice(file_names)
+
+            # Find all objects for this file
+            image_rows = df[df['file_name'] == file_name]
+
+            if image_rows.empty:
+                self.progress_signal.emit(f"No features found for {file_name}!")
+                return
+
+            # Select a random object from this file
+            selected_row = image_rows.sample(1).iloc[0]
             object_label = selected_row['object_label']
+
+            self.progress_signal.emit(f"Selected file: {file_name}, object: {object_label}")
 
             # Check if we can find the original, skeleton, and binarized images
             data_image_path = self.find_image_file(file_name)
@@ -108,16 +125,29 @@ class FeatureVisualizationThread(QThread):
                 self.progress_signal.emit("Failed to load image files!")
                 return
 
+            # Get labeled components
+            num_labels, labels = cv2.connectedComponents(binarized_image)
+
+            # Get all available labels in the image
+            unique_labels = np.unique(labels)
+            unique_labels = unique_labels[unique_labels > 0]  # Remove background (0)
+
+            if len(unique_labels) == 0:
+                self.progress_signal.emit("No objects found in the binarized image!")
+                return
+
+            # Check if the selected object_label exists in the image
+            if object_label not in unique_labels:
+                # If not, select one that does exist
+                self.progress_signal.emit(f"Object {object_label} not found in image. Selecting another object.")
+                object_label = random.choice(unique_labels)
+
+            # Extract the mask for the selected object
+            component_mask = (labels == object_label).astype(np.uint8) * 255
+
             # Create a colored version of the binarized image for overlay
             binarized_colored = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
             data_colored = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
-
-            # Extract the mask for the selected object
-            component_mask = (self.get_labeled_components(binarized_image) == object_label).astype(np.uint8) * 255
-
-            if np.sum(component_mask) == 0:
-                self.progress_signal.emit(f"Could not find object with label {object_label}!")
-                return
 
             # Get the bounding box for the feature
             x, y, w, h = cv2.boundingRect(component_mask)
@@ -647,19 +677,19 @@ class ModernUI(QMainWindow):
         self.feature_image_label = QLabel("Feature visualization will appear here")
         self.feature_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.feature_image_label.setMinimumHeight(300)
+        self.feature_image_label.setMinimumHeight(400)
         self.viz_layout.addWidget(self.feature_image_label, 0, 0)
 
         self.original_image_label = QLabel("Original image will appear here")
         self.original_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.original_image_label.setMinimumHeight(300)
+        self.original_image_label.setMinimumHeight(400)
         self.viz_layout.addWidget(self.original_image_label, 0, 1)
 
         self.skeleton_image_label = QLabel("Skeleton overlay will appear here")
         self.skeleton_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.skeleton_image_label.setMinimumHeight(300)
+        self.skeleton_image_label.setMinimumHeight(400)
         self.viz_layout.addWidget(self.skeleton_image_label, 1, 0, 1, 2)
 
         # Feature stats section
@@ -743,48 +773,82 @@ class ModernUI(QMainWindow):
         """Updates the visualization status label"""
         self.viz_status_label.setText(message)
 
+    def crop_around_feature(self, image_path, x, y, w, h, padding=50):
+        """Crop the image around the feature with padding"""
+        img = cv2.imread(image_path)
+        if img is None:
+            return None
+
+        # Calculate crop area with padding
+        height, width = img.shape[:2]
+        x1 = max(0, x - padding)
+        y1 = max(0, y - padding)
+        x2 = min(width, x + w + padding)
+        y2 = min(height, y + h + padding)
+
+        # Crop the image
+        cropped = img[y1:y2, x1:x2]
+        return cropped
+
     def display_feature(self, stats):
         """Displays the feature visualization and statistics"""
         # Re-enable the button
         self.viz_button.setEnabled(True)
 
+        # Get bounding box coordinates for cropping
+        x, y, w, h = stats['x'], stats['y'], stats['width'], stats['height']
+        padding = max(100, w//2, h//2)  # Use dynamic padding based on feature size
+
+        # Create cropped versions of all images
+        feature_cropped = self.crop_around_feature(stats['feature_overlay_path'], x, y, w, h, padding)
+        original_cropped = self.crop_around_feature(stats['original_path'], x, y, w, h, padding)
+        skeleton_cropped = self.crop_around_feature(stats['skeleton_overlay_path'], x, y, w, h, padding)
+
+        # Save the cropped images
+        temp_dir = "temp"
+        feature_cropped_path = os.path.join(temp_dir, "feature_overlay_zoomed.png")
+        original_cropped_path = os.path.join(temp_dir, "original_zoomed.png")
+        skeleton_cropped_path = os.path.join(temp_dir, "skeleton_overlay_zoomed.png")
+
+        cv2.imwrite(feature_cropped_path, feature_cropped)
+        cv2.imwrite(original_cropped_path, original_cropped)
+        cv2.imwrite(skeleton_cropped_path, skeleton_cropped)
+
         # Display the feature overlay image
-        if os.path.exists(stats['feature_overlay_path']):
-            pixmap = QPixmap(stats['feature_overlay_path'])
-            scaled_pixmap = pixmap.scaled(
-                min(400, self.feature_image_label.width()),
-                min(400, self.feature_image_label.height()),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.feature_image_label.setPixmap(scaled_pixmap)
-            self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = QPixmap(feature_cropped_path)
+        scaled_pixmap = pixmap.scaled(
+            min(500, self.feature_image_label.width()),
+            min(500, self.feature_image_label.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.feature_image_label.setPixmap(scaled_pixmap)
+        self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Display the original image
-        if os.path.exists(stats['original_path']):
-            pixmap = QPixmap(stats['original_path'])
-            scaled_pixmap = pixmap.scaled(
-                min(400, self.original_image_label.width()),
-                min(400, self.original_image_label.height()),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.original_image_label.setPixmap(scaled_pixmap)
-            self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = QPixmap(original_cropped_path)
+        scaled_pixmap = pixmap.scaled(
+            min(500, self.original_image_label.width()),
+            min(500, self.original_image_label.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.original_image_label.setPixmap(scaled_pixmap)
+        self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Display the skeleton overlay
-        if os.path.exists(stats['skeleton_overlay_path']):
-            pixmap = QPixmap(stats['skeleton_overlay_path'])
-            scaled_pixmap = pixmap.scaled(
-                min(800, self.skeleton_image_label.width()),
-                min(400, self.skeleton_image_label.height()),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.skeleton_image_label.setPixmap(scaled_pixmap)
-            self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = QPixmap(skeleton_cropped_path)
+        scaled_pixmap = pixmap.scaled(
+            min(800, self.skeleton_image_label.width()),
+            min(500, self.skeleton_image_label.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.skeleton_image_label.setPixmap(scaled_pixmap)
+        self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Update statistics
+        # [The rest of the statistics code remains unchanged]
         self.stat_value_labels['file_name_value'].setText(str(stats['file_name']))
         self.stat_value_labels['object_label_value'].setText(str(stats['object_label']))
         self.stat_value_labels['area_value'].setText(str(stats['area']))
@@ -931,3 +995,4 @@ class ModernUI(QMainWindow):
 
             if not found_class_plots:
                 self.shap_plot_label.setText(f"SHAP plot not found ({shap_path})")
+
