@@ -1,10 +1,13 @@
 import sys
 import os
+import random
+import cv2
+import numpy as np
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton,
                             QLabel, QFileDialog, QStyleFactory, QMainWindow,
                             QTabWidget, QFrame, QProgressBar, QHBoxLayout,
-                            QScrollArea)
-from PyQt6.QtGui import QPalette, QColor, QFont, QPixmap
+                            QScrollArea, QGridLayout, QSizePolicy)
+from PyQt6.QtGui import QPalette, QColor, QFont, QPixmap, QImage
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from preprocessing import *
 from postprocessing import *
@@ -47,6 +50,207 @@ class ModelTrainingThread(QThread):
         self.progress_signal.emit(f"Training {self.model_name} model complete!")
         self.training_complete.emit()
 
+class FeatureVisualizationThread(QThread):
+    visualization_complete = pyqtSignal(dict)
+    progress_signal = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+
+    def run(self):
+        self.progress_signal.emit("Finding random feature...")
+
+        # Get all available feature CSV files
+        feature_files = []
+        features_dir = "extracted_features"
+        if os.path.exists(features_dir):
+            feature_files = [os.path.join(features_dir, f) for f in os.listdir(features_dir)
+                            if f.endswith('_features.csv')]
+
+        if not feature_files:
+            self.progress_signal.emit("No feature files found!")
+            return
+
+        # Randomly select a CSV file
+        selected_file = random.choice(feature_files)
+        self.progress_signal.emit(f"Selected: {os.path.basename(selected_file)}")
+
+        try:
+            # Load the CSV file
+            df = pd.read_csv(selected_file)
+
+            if df.empty:
+                self.progress_signal.emit("Selected CSV file is empty!")
+                return
+
+            # Randomly select a row from the dataframe
+            selected_row = df.sample(1).iloc[0]
+
+            # Get the file name and object label for this feature
+            file_name = selected_row['file_name']
+            object_label = selected_row['object_label']
+
+            # Check if we can find the original, skeleton, and binarized images
+            data_image_path = self.find_image_file(file_name)
+            skeleton_image_path = self.find_skeleton_file(file_name)
+            binarized_image_path = self.find_binarized_file(file_name)
+
+            if not (data_image_path and skeleton_image_path and binarized_image_path):
+                self.progress_signal.emit("Could not find all necessary image files!")
+                return
+
+            # Load the images
+            data_image = cv2.imread(data_image_path, cv2.IMREAD_GRAYSCALE)
+            skeleton_image = cv2.imread(skeleton_image_path, cv2.IMREAD_GRAYSCALE)
+            binarized_image = cv2.imread(binarized_image_path, cv2.IMREAD_GRAYSCALE)
+
+            if data_image is None or skeleton_image is None or binarized_image is None:
+                self.progress_signal.emit("Failed to load image files!")
+                return
+
+            # Create a colored version of the binarized image for overlay
+            binarized_colored = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
+            data_colored = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
+
+            # Extract the mask for the selected object
+            component_mask = (self.get_labeled_components(binarized_image) == object_label).astype(np.uint8) * 255
+
+            if np.sum(component_mask) == 0:
+                self.progress_signal.emit(f"Could not find object with label {object_label}!")
+                return
+
+            # Get the bounding box for the feature
+            x, y, w, h = cv2.boundingRect(component_mask)
+
+            # Create a copy of the skeleton image with a red overlay for the feature
+            skeleton_colored = cv2.cvtColor(skeleton_image, cv2.COLOR_GRAY2BGR)
+            feature_mask = np.zeros_like(skeleton_colored)
+            feature_mask[component_mask > 0] = [0, 0, 255]  # Red overlay
+            blended = cv2.addWeighted(skeleton_colored, 1.0, feature_mask, 0.5, 0)
+
+            # Draw a green rectangle around the feature
+            cv2.rectangle(blended, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            # Also create a blended image with the binarized and skeleton
+            blended_skeleton = self.blend_skeleton(binarized_colored, skeleton_image)
+
+            # Save temporary images for display
+            temp_dir = "temp"
+            os.makedirs(temp_dir, exist_ok=True)
+
+            blended_path = os.path.join(temp_dir, "feature_overlay.png")
+            original_path = os.path.join(temp_dir, "original.png")
+            skeleton_path = os.path.join(temp_dir, "skeleton_overlay.png")
+
+            cv2.imwrite(blended_path, blended)
+            cv2.imwrite(original_path, data_colored)
+            cv2.imwrite(skeleton_path, blended_skeleton)
+
+            # Prepare stats to display
+            stats = {
+                'file_name': file_name,
+                'object_label': object_label,
+                'area': selected_row.get('area', 'N/A'),
+                'perimeter': selected_row.get('perimeter', 'N/A'),
+                'num_branches': selected_row.get('num_branches', 'N/A'),
+                'num_projections': selected_row.get('num_projections', 'N/A'),
+                'circularity': selected_row.get('circularity', 'N/A'),
+                'fractal_dim': selected_row.get('fractal_dim', 'N/A'),
+                'roundness': selected_row.get('roundness', 'N/A'),
+                'total_skeleton_length': selected_row.get('total_skeleton_length', 'N/A'),
+                'feature_overlay_path': blended_path,
+                'original_path': original_path,
+                'skeleton_overlay_path': skeleton_path,
+                'x': x,
+                'y': y,
+                'width': w,
+                'height': h
+            }
+
+            self.progress_signal.emit("Feature visualization ready!")
+            self.visualization_complete.emit(stats)
+
+        except Exception as e:
+            self.progress_signal.emit(f"Error during visualization: {str(e)}")
+
+    def get_labeled_components(self, binary_image):
+        # Run connected components on the binary image
+        num_labels, labels = cv2.connectedComponents(binary_image)
+        return labels
+
+    def blend_skeleton(self, original, skeleton):
+        # Create a copy of the original
+        og = original.copy()
+        # Create a mask from the skeleton
+        skeleton_mask = skeleton > 0
+        # Apply red color to skeleton pixels
+        og[skeleton_mask] = [0, 0, 255]
+        return og
+
+    def find_image_file(self, file_name):
+        # Look for the file in potential data directories
+        data_dirs = ["data", "data/Control", "data/Images", "data/Phenotype 1", "data/Phenotype 2"]
+
+        for data_dir in data_dirs:
+            if not os.path.exists(data_dir):
+                continue
+
+            # Check if the file exists directly in the directory
+            path = os.path.join(data_dir, file_name)
+            if os.path.exists(path):
+                return path
+
+            # Also check subdirectories if any
+            for root, dirs, files in os.walk(data_dir):
+                if file_name in files:
+                    return os.path.join(root, file_name)
+
+        return None
+
+    def find_skeleton_file(self, file_name):
+        # Look for the file in the skeletonized directory
+        skeleton_dirs = ["skeletonized_images", "skeletonized_images/Control",
+                        "skeletonized_images/Images", "skeletonized_images/Phenotype 1",
+                        "skeletonized_images/Phenotype 2"]
+
+        for skel_dir in skeleton_dirs:
+            if not os.path.exists(skel_dir):
+                continue
+
+            # Check if the file exists directly in the directory
+            path = os.path.join(skel_dir, file_name)
+            if os.path.exists(path):
+                return path
+
+            # Also check subdirectories if any
+            for root, dirs, files in os.walk(skel_dir):
+                if file_name in files:
+                    return os.path.join(root, file_name)
+
+        return None
+
+    def find_binarized_file(self, file_name):
+        # Look for the file in the binarized directory
+        binary_dirs = ["binarized_images", "binarized_images/Control",
+                      "binarized_images/Images", "binarized_images/Phenotype 1",
+                      "binarized_images/Phenotype 2"]
+
+        for bin_dir in binary_dirs:
+            if not os.path.exists(bin_dir):
+                continue
+
+            # Check if the file exists directly in the directory
+            path = os.path.join(bin_dir, file_name)
+            if os.path.exists(path):
+                return path
+
+            # Also check subdirectories if any
+            for root, dirs, files in os.walk(bin_dir):
+                if file_name in files:
+                    return os.path.join(root, file_name)
+
+        return None
+
 class ModernUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -54,11 +258,12 @@ class ModernUI(QMainWindow):
         self.selected_folder = None
         self.processing_thread = None
         self.training_thread = None
+        self.visualization_thread = None
         self.init_ui()
 
     def init_ui(self):
         self.setWindowTitle("Image Analysis Tool")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 1200, 800)
         self.set_dark_mode()
 
         # Create main widget and layout
@@ -348,15 +553,248 @@ class ModernUI(QMainWindow):
 
     def setup_viz_tab(self, tab):
         layout = QVBoxLayout(tab)
-        placeholder = QLabel("Visualizations will be displayed here")
-        placeholder.setStyleSheet("""
-            QLabel {
-                color: #888888;
-                font-size: 16px;
+
+        # Status frame for visualization
+        viz_status_frame = QFrame()
+        viz_status_frame.setStyleSheet("""
+            QFrame {
+                background: #333333;
+                border-radius: 10px;
+                padding: 20px;
+                margin-bottom: 20px;
             }
         """)
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(placeholder)
+        viz_status_layout = QVBoxLayout(viz_status_frame)
+
+        # Status label for visualization
+        self.viz_status_label = QLabel("No feature visualized")
+        self.viz_status_label.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-size: 14px;
+                padding: 10px;
+            }
+        """)
+        self.viz_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        viz_status_layout.addWidget(self.viz_status_label)
+
+        # Random feature button
+        button_style = """
+            QPushButton {
+                background-color: #0078d4;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px;
+                font-size: 14px;
+                margin: 5px;
+            }
+            QPushButton:hover {
+                background-color: #1084d8;
+            }
+            QPushButton:pressed {
+                background-color: #006cbd;
+            }
+            QPushButton:disabled {
+                background-color: #454545;
+                color: #888888;
+            }
+        """
+
+        self.viz_button = QPushButton("Show Random Feature")
+        self.viz_button.setStyleSheet(button_style)
+        self.viz_button.clicked.connect(self.visualize_random_feature)
+        viz_status_layout.addWidget(self.viz_button)
+
+        layout.addWidget(viz_status_frame)
+
+        # Create a scroll area for visualization
+        viz_scroll_area = QScrollArea()
+        viz_scroll_area.setWidgetResizable(True)
+        viz_scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #2b2b2b;
+                width: 10px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #555555;
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        # Visualization display frame (inside scroll area)
+        self.viz_display_frame = QFrame()
+        self.viz_display_frame.setStyleSheet("""
+            QFrame {
+                background: #333333;
+                border-radius: 10px;
+                padding: 20px;
+            }
+        """)
+        self.viz_layout = QGridLayout(self.viz_display_frame)
+
+        # Feature visualization section
+        self.feature_image_label = QLabel("Feature visualization will appear here")
+        self.feature_image_label.setStyleSheet("color: #888888; font-size: 14px;")
+        self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.feature_image_label.setMinimumHeight(300)
+        self.viz_layout.addWidget(self.feature_image_label, 0, 0)
+
+        self.original_image_label = QLabel("Original image will appear here")
+        self.original_image_label.setStyleSheet("color: #888888; font-size: 14px;")
+        self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.original_image_label.setMinimumHeight(300)
+        self.viz_layout.addWidget(self.original_image_label, 0, 1)
+
+        self.skeleton_image_label = QLabel("Skeleton overlay will appear here")
+        self.skeleton_image_label.setStyleSheet("color: #888888; font-size: 14px;")
+        self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.skeleton_image_label.setMinimumHeight(300)
+        self.viz_layout.addWidget(self.skeleton_image_label, 1, 0, 1, 2)
+
+        # Feature stats section
+        self.stats_frame = QFrame()
+        self.stats_frame.setStyleSheet("""
+            QFrame {
+                background: #3d3d3d;
+                border-radius: 10px;
+                padding: 15px;
+                margin-top: 20px;
+            }
+        """)
+        self.stats_layout = QVBoxLayout(self.stats_frame)
+
+        stats_title = QLabel("Feature Statistics")
+        stats_title.setStyleSheet("color: #ffffff; font-size: 16px; font-weight: bold;")
+        stats_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stats_layout.addWidget(stats_title)
+
+        self.stats_grid = QGridLayout()
+
+        stat_labels = [
+            ("File Name:", "file_name_value"),
+            ("Object Label:", "object_label_value"),
+            ("Area:", "area_value"),
+            ("Perimeter:", "perimeter_value"),
+            ("Circularity:", "circularity_value"),
+            ("Roundness:", "roundness_value"),
+            ("Number of Branches:", "branches_value"),
+            ("Number of Projections:", "projections_value"),
+            ("Total Skeleton Length:", "skeleton_length_value"),
+            ("Fractal Dimension:", "fractal_dim_value")
+        ]
+
+        # Create labels for all stats
+        self.stat_value_labels = {}
+
+        for idx, (label_text, value_id) in enumerate(stat_labels):
+            row = idx // 2
+            col_start = (idx % 2) * 2
+
+            label = QLabel(label_text)
+            label.setStyleSheet("color: #cccccc; font-size: 13px;")
+
+            value_label = QLabel("N/A")
+            value_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;")
+            self.stat_value_labels[value_id] = value_label
+
+            self.stats_grid.addWidget(label, row, col_start)
+            self.stats_grid.addWidget(value_label, row, col_start + 1)
+
+        self.stats_layout.addLayout(self.stats_grid)
+        self.viz_layout.addWidget(self.stats_frame, 2, 0, 1, 2)
+
+        # Set the visualization display frame as the widget for the scroll area
+        viz_scroll_area.setWidget(self.viz_display_frame)
+        layout.addWidget(viz_scroll_area)
+
+    def toggle_charts(self):
+        self.charts_enabled = not self.charts_enabled
+        self.charts_button.setText(f"Toggle Charts: {'ON' if self.charts_enabled else 'OFF'}")
+
+    def visualize_random_feature(self):
+        """Selects a random feature from the extracted features and displays it"""
+        # Check if extracted features exist
+        if not os.path.exists("extracted_features"):
+            self.viz_status_label.setText("No extracted features found! Process images first.")
+            return
+
+        # Update UI
+        self.viz_status_label.setText("Finding random feature...")
+        self.viz_button.setEnabled(False)
+
+        # Start the visualization thread
+        self.visualization_thread = FeatureVisualizationThread()
+        self.visualization_thread.progress_signal.connect(self.update_viz_status)
+        self.visualization_thread.visualization_complete.connect(self.display_feature)
+        self.visualization_thread.start()
+
+    def update_viz_status(self, message):
+        """Updates the visualization status label"""
+        self.viz_status_label.setText(message)
+
+    def display_feature(self, stats):
+        """Displays the feature visualization and statistics"""
+        # Re-enable the button
+        self.viz_button.setEnabled(True)
+
+        # Display the feature overlay image
+        if os.path.exists(stats['feature_overlay_path']):
+            pixmap = QPixmap(stats['feature_overlay_path'])
+            scaled_pixmap = pixmap.scaled(
+                min(400, self.feature_image_label.width()),
+                min(400, self.feature_image_label.height()),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.feature_image_label.setPixmap(scaled_pixmap)
+            self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Display the original image
+        if os.path.exists(stats['original_path']):
+            pixmap = QPixmap(stats['original_path'])
+            scaled_pixmap = pixmap.scaled(
+                min(400, self.original_image_label.width()),
+                min(400, self.original_image_label.height()),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.original_image_label.setPixmap(scaled_pixmap)
+            self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Display the skeleton overlay
+        if os.path.exists(stats['skeleton_overlay_path']):
+            pixmap = QPixmap(stats['skeleton_overlay_path'])
+            scaled_pixmap = pixmap.scaled(
+                min(800, self.skeleton_image_label.width()),
+                min(400, self.skeleton_image_label.height()),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.skeleton_image_label.setPixmap(scaled_pixmap)
+            self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Update statistics
+        self.stat_value_labels['file_name_value'].setText(str(stats['file_name']))
+        self.stat_value_labels['object_label_value'].setText(str(stats['object_label']))
+        self.stat_value_labels['area_value'].setText(str(stats['area']))
+        self.stat_value_labels['perimeter_value'].setText(str(stats['perimeter']))
+        self.stat_value_labels['circularity_value'].setText(str(stats['circularity']))
+        self.stat_value_labels['roundness_value'].setText(str(stats['roundness']))
+        self.stat_value_labels['branches_value'].setText(str(stats['num_branches']))
+        self.stat_value_labels['projections_value'].setText(str(stats['num_projections']))
+        self.stat_value_labels['skeleton_length_value'].setText(str(stats['total_skeleton_length']))
+        self.stat_value_labels['fractal_dim_value'].setText(str(stats['fractal_dim']))
 
     def set_dark_mode(self):
         dark_palette = QPalette()
@@ -407,10 +845,6 @@ class ModernUI(QMainWindow):
 
     def update_model_status(self, message):
         self.model_status_label.setText(message)
-
-    def toggle_charts(self):
-        self.charts_enabled = not self.charts_enabled
-        self.charts_button.setText(f"Toggle Charts: {'ON' if self.charts_enabled else 'OFF'}")
 
     def train_model(self, model_name):
         self.update_model_status(f"Training {model_name} model...")
