@@ -131,6 +131,9 @@ class FeatureVisualizationThread(QThread):
             # Extract the mask for the selected object
             component_mask = (labels == object_label).astype(np.uint8) * 255
 
+            # Apply enhancement to the original image (sharpen and boost contrast)
+            enhanced_data_image = self.enhance_image(data_image)
+
             # Create colored versions
             binarized_colored = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
             data_colored_original = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
@@ -262,11 +265,11 @@ class FeatureVisualizationThread(QThread):
     def enhance_image(self, image):
         """Apply sharpening and contrast enhancement to an image"""
         # Apply unsharp mask for sharpening
-        # image = (unsharp_mask(image, radius=20, amount=2) * 255).astype(np.uint8)
+        image = (unsharp_mask(image, radius=20, amount=2) * 255).astype(np.uint8)
 
         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) instead of regular histogram equalization
         # This provides better contrast without the excessive noise amplification
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(image)
 
         # Apply additional mild contrast stretching
@@ -337,6 +340,49 @@ class ModernUI(QMainWindow):
         tabs.addTab(viz_tab, "Visualizations")
 
         layout.addWidget(tabs)
+
+        # Create a QLabel for the icon in the bottom right corner
+        self.icon_label = QLabel(self)
+
+        # Load the icon image
+        icon_pixmap = QPixmap("icon.png")
+
+        # Scale the icon if needed (adjust the width and height as necessary)
+        scaled_icon = icon_pixmap.scaled(
+            50, 50,  # Width, height - adjust as needed for your icon
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+        self.icon_label.setPixmap(scaled_icon)
+
+        # Position the icon in the bottom right corner
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+
+        # Make sure the icon will stay in the bottom right corner when window resizes
+        self.icon_label.setGeometry(
+            self.width() - scaled_icon.width() - 30,  # 20px margin from right edge
+            self.height() - scaled_icon.height() - 25,  # 20px margin from bottom edge
+            scaled_icon.width(),
+            scaled_icon.height()
+        )
+
+        # Make sure the icon stays in the right position when window is resized
+        self.resizeEvent = self.on_resize
+
+    def on_resize(self, event):
+        # Update icon position when window is resized
+        if hasattr(self, 'icon_label') and hasattr(self.icon_label, 'pixmap') and self.icon_label.pixmap():
+            pixmap_size = self.icon_label.pixmap().size()
+            self.icon_label.setGeometry(
+                self.width() - pixmap_size.width() - 30,  # 20px margin from right edge
+                self.height() - pixmap_size.height() - 25,  # 20px margin from bottom edge
+                pixmap_size.width(),
+                pixmap_size.height()
+        )
+
+        # Call the original resize event handler if needed
+        QMainWindow.resizeEvent(self, event)
 
     def setup_files_tab(self, tab):
         layout = QVBoxLayout(tab)
@@ -995,4 +1041,3 @@ class ModernUI(QMainWindow):
 
             if not found_class_plots:
                 self.shap_plot_label.setText(f"SHAP plot not found ({shap_path})")
-

@@ -151,12 +151,11 @@ def process_image(file_path, binarized_dir, skeleton_dir):
 
     return str(file_path.name), features
 
-def binarize_image(image_path, output_path, method = "2"):
+def binarize_image(image_path, output_path, method = "1"):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
     if method == "old": binary = binarize_old(image)
-    if method == "1": binary = binarize_new_1(image)
-    if method == "2": binary = binarize_new(image)
+    if method == "1": binary = binarize_new(image)
 
     io.imsave(output_path, binary)
 
@@ -179,83 +178,6 @@ def binarize_old(image):
     binary[too_small_mask] = 0
 
     return binary
-def binarize_new_1(image):
-
-    thresh = ski.filters.threshold_triangle(image)
-    binary_full = image > thresh
-    binary_full = (binary_full * 255).astype(np.uint8)
-
-    # Define the kernel for dilation
-    kernel = np.ones((5, 5), np.uint8)
-
-    binary_full = cv2.morphologyEx(binary_full, cv2.MORPH_OPEN, kernel)
-
-    # Find contours
-    contours, _ = cv2.findContours(binary_full, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Create a mask to store the filtered particles
-    final_mask = np.zeros_like(binary_full)
-
-    # Loop through contours and keep only large ones
-    for cnt in contours:
-        contour_mask = np.zeros_like(binary_full)
-        cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=cv2.FILLED)
-
-        # Dilate the contour
-        dilated_mask = cv2.dilate(contour_mask, kernel, iterations=1)
-
-        # Find bounding rectangle of the dilated mask
-        x, y, w, h = cv2.boundingRect(dilated_mask)
-
-        # Crop the original image to the bounding box
-        cropped_region = image[y:y+h, x:x+w]
-        cropped_dilated_mask = dilated_mask[y:y+h, x:x+w]
-
-        enhance_contrast = 10
-        cropped_region = np.clip(cropped_region.astype(np.int32) * enhance_contrast, 0, 255).astype(np.uint8)
-
-        # Apply triangle thresholding to the masked region
-        block_size = w//2
-        if block_size%2 == 0:
-            block_size = block_size + 1
-        thresh = ski.filters.threshold_local(cropped_region, block_size=block_size)
-        binary_region = cropped_region > thresh
-        binary_region = (binary_region * 255).astype(np.uint8)
-
-        # Label connected components in binary_region
-        labeled_region, num_features = label(binary_region)
-
-        # Create an empty array to store the resulting components
-        kept_components = np.zeros_like(binary_region)
-
-        # Iterate through each component and check for overlap with cropped_dilated_mask
-        for i in range(1, num_features + 1):
-            # Create a mask for the current component
-            component_mask = (labeled_region == i)
-
-            # Check if there is any overlap with cropped_dilated_mask
-            if np.any(component_mask & cropped_dilated_mask):  # If overlap exists
-                kept_components[component_mask] = 255  # Keep the component
-
-        # Add the thresholded cropped region to the final mask at the correct location
-        final_mask[y:y+h, x:x+w] = cv2.bitwise_or(final_mask[y:y+h, x:x+w], kept_components)
-
-    # Fill holes
-    contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Compute sizes (areas) of all detected particles
-    particle_sizes = np.array([cv2.contourArea(cnt) for cnt in contours])
-    size_thresh = ski.filters.threshold_triangle(particle_sizes)
-
-    # Initialize the output mask
-    output_mask = np.zeros_like(binary_full)
-
-    # Draw contours that have an area above the threshold
-    for cnt in contours:
-        if cv2.contourArea(cnt) > size_thresh:  # Only draw if the area is above the threshold
-            cv2.drawContours(output_mask, [cnt], -1, 255, thickness=cv2.FILLED)
-
-    return output_mask
 
 def binarize_new(image):
 
