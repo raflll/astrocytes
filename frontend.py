@@ -131,9 +131,6 @@ class FeatureVisualizationThread(QThread):
             # Extract the mask for the selected object
             component_mask = (labels == object_label).astype(np.uint8) * 255
 
-            # Apply enhancement to the original image (sharpen and boost contrast)
-            enhanced_data_image = self.enhance_image(data_image)
-
             # Create colored versions
             binarized_colored = cv2.cvtColor(binarized_image, cv2.COLOR_GRAY2BGR)
             data_colored_original = cv2.cvtColor(data_image, cv2.COLOR_GRAY2BGR)
@@ -147,10 +144,10 @@ class FeatureVisualizationThread(QThread):
 
             # First image: Blended skeleton with binarized + bounding box
             blended_skeleton = self.blend_skeleton(binarized_colored, skeleton_image)
-            cv2.rectangle(blended_skeleton, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.rectangle(blended_skeleton, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 255, 0), 2)
 
             # Second image: Unenhanced data with bounding box
-            cv2.rectangle(data_colored_original, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.rectangle(data_colored_original, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 255, 0), 2)
 
             # Save temporary images for display
             temp_dir = "temp"
@@ -265,11 +262,11 @@ class FeatureVisualizationThread(QThread):
     def enhance_image(self, image):
         """Apply sharpening and contrast enhancement to an image"""
         # Apply unsharp mask for sharpening
-        image = (unsharp_mask(image, radius=20, amount=2) * 255).astype(np.uint8)
+        # image = (unsharp_mask(image, radius=20, amount=2) * 255).astype(np.uint8)
 
         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) instead of regular histogram equalization
         # This provides better contrast without the excessive noise amplification
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
         enhanced = clahe.apply(image)
 
         # Apply additional mild contrast stretching
@@ -336,7 +333,7 @@ class ModernUI(QMainWindow):
         self.setup_viz_tab(viz_tab)
 
         tabs.addTab(files_tab, "Files")
-        tabs.addTab(stats_tab, "Statistics")
+        # tabs.addTab(stats_tab, "Statistics")
         tabs.addTab(viz_tab, "Visualizations")
 
         layout.addWidget(tabs)
