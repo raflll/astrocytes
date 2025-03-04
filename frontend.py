@@ -292,7 +292,7 @@ class ModernUI(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("Image Analysis Tool")
+        self.setWindowTitle("pip install Bonsai")
         self.setGeometry(100, 100, 1200, 800)
         self.set_dark_mode()
 
