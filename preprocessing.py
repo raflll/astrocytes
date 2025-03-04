@@ -256,6 +256,7 @@ def binarize_new(image):
             cv2.drawContours(output_mask, [cnt], -1, 255, thickness=cv2.FILLED)
 
     binarized_img = (output_mask > 0).astype(np.uint8) * 255
+    return binarized_img
 
 def apply_skeletonization(binarized_file, skeletonized_file):
     PRUNE_SIZE = 3
