@@ -18,7 +18,7 @@ def get_image(input_path, unsharp=False):
 
 
 # Can set binarization method, using new method right now (2.13.25)
-def binarize(input_path, method="new", plot=False):
+def binarize(input_path, method="latest", plot=False):
     if method == "latest":
         image = get_image(input_path)
         x, y, w, h = cv2.boundingRect(image)
