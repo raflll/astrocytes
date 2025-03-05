@@ -23,11 +23,11 @@ def binarize(input_path, method="latest", plot=False):
         image = get_image(input_path)
         x, y, w, h = cv2.boundingRect(image)
 
-        # # Getting unsharp image - dynamic radius/amount parameters
-        # radius = max(1, int(min(w, h) * 0.12)) # determines blur size, using higher % to preserve structure for entire img
-        # contrast = np.std(image)  # measuring contrast as std
-        # amount = np.clip((contrast / 50), 1, 3)  # normalize contrast to medium range - do not want over-sharpening for entire img yet
-        # image = (unsharp_mask(image, radius=radius, amount=amount) * 255).astype(np.uint8)
+        # Getting unsharp image - dynamic radius/amount parameters
+        radius = max(1, int(min(w, h) * 0.12)) # determines blur size, using higher % to preserve structure for entire img
+        contrast = np.std(image)  # measuring contrast as std
+        amount = np.clip((contrast / 50), 1, 3)  # normalize contrast to medium range - do not want over-sharpening for entire img yet
+        image = (unsharp_mask(image, radius=radius, amount=amount) * 255).astype(np.uint8)
 
         full_thresh = ski.filters.threshold_triangle(image)
         # print(thresh)
@@ -37,7 +37,7 @@ def binarize(input_path, method="latest", plot=False):
         binary_full = image > full_thresh
         binary_full = (binary_full * 255).astype(np.uint8)
 
-        print(full_thresh)
+        # print(full_thresh)
 
         # Dilate
         kernel = np.ones((2, 2), np.uint8)
@@ -53,21 +53,24 @@ def binarize(input_path, method="latest", plot=False):
         for cnt in contours:
             contour_mask = np.zeros_like(binary_full)
             cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+            
+            # dilated_mask = contour_mask
 
             # Dilate the contour
             dilated_mask = cv2.dilate(contour_mask, kernel, iterations=1)
 
             # Find bounding rectangle of the dilated mask and crop
             x, y, w, h = cv2.boundingRect(dilated_mask)
+
             cropped_region = image[y:y+h, x:x+w]
             cropped_dilated_mask = dilated_mask[y:y+h, x:x+w]
 
-            # use low value
-            enhance_contrast = 2.5
-            cropped_region = np.clip(cropped_region.astype(np.int32) * enhance_contrast, 0, 255).astype(np.uint8)
+            # # use low value
+            # enhance_contrast = 2.5
+            # cropped_region = np.clip(cropped_region.astype(np.int32) * enhance_contrast, 0, 255).astype(np.uint8)
 
             # Use unsharp to enhance specific region (instead of enhance), dynamically adjust radius
-            radius = max(1, int(min(w, h) * 0.02)) # using small % bcs smaller radius captures more detail
+            radius = max(1, int(min(w, h) * 0.03)) # using small % bcs smaller radius captures more detail
             # print(radius)
             # Found that instead of calculating contrast dynamically, use high contrast at this stage since focusing on one component
             # and want to preserve as much detail
@@ -76,7 +79,7 @@ def binarize(input_path, method="latest", plot=False):
             # amount = np.clip((contrast / 5), 3, 6)
             # print(thresh)
             region_thresh = ski.filters.threshold_triangle(cropped_region)
-            cropped_region = (unsharp_mask(cropped_region, radius=radius, amount=region_thresh) * 255).astype(np.uint8)
+            cropped_region = (unsharp_mask(cropped_region, radius=radius, amount=5) * 255).astype(np.uint8)
 
             # Apply local thresholding to the masked region
             block_size = w//2
@@ -92,7 +95,7 @@ def binarize(input_path, method="latest", plot=False):
             # print(iterations)
             binary_region = cv2.morphologyEx(binary_region, cv2.MORPH_CLOSE, kernel, iterations=3)
             # binary_region = cv2.bilateralFilter(binary_region, d=3, sigmaColor=80, sigmaSpace=25)
-            
+            # binary_region = cv2.dilate(binary_region, kernel, iterations=1)
 
             # No change to Ethan's binarize from this point            
             # Label connected components in binary_region
