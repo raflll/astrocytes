@@ -133,8 +133,6 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
         else:
             print(f"No features to save for folder {f}")
 
-
-
 def process_image(file_path, binarized_dir, skeleton_dir):
     # Make strings from the combined paths
     binarized_path = binarized_dir / file_path.name
@@ -151,11 +149,13 @@ def process_image(file_path, binarized_dir, skeleton_dir):
 
     return str(file_path.name), features
 
-def binarize_image(image_path, output_path, method = "1"):
+def binarize_image(image_path, output_path, method = "old"):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
     if method == "old": binary = binarize_old(image)
     if method == "1": binary = binarize_new(image)
+    if method == "2": binary = binarize_new2(image)
+    if method == "3": binary = binarize_new3(image)
 
     io.imsave(output_path, binary)
 
@@ -180,14 +180,28 @@ def binarize_old(image):
     return binary
 
 def binarize_new(image):
+    x, y, w, h = cv2.boundingRect(image)
 
-    thresh = ski.filters.threshold_triangle(image)
-    binary_full = image > thresh
+    # # Getting unsharp image - dynamic radius/amount parameters
+    # radius = max(1, int(min(w, h) * 0.12)) # determines blur size, using higher % to preserve structure for entire img
+    # contrast = np.std(image)  # measuring contrast as std
+    # amount = np.clip((contrast / 50), 1, 3)  # normalize contrast to medium range - do not want over-sharpening for entire img yet
+    # image = (unsharp_mask(image, radius=radius, amount=amount) * 255).astype(np.uint8)
+
+    full_thresh = ski.filters.threshold_triangle(image)
+    # print(thresh)
+    # enhance = 3 if full_thresh < 5 else 2.5
+    # iterations = 3 if full_thresh < 5 else 2
+    # contrast = 4 if full_thresh < 5 else 5
+    binary_full = image > full_thresh
     binary_full = (binary_full * 255).astype(np.uint8)
 
-    # Define the kernel for dilation
-    kernel = np.ones((5, 5), np.uint8)
+    # print(full_thresh)
 
+    # Dilate
+    kernel1 = np.ones((7, 7), np.uint8)
+    binary_full = cv2.dilate(binary_full, kernel1, iterations = 1)
+    kernel = np.ones((3, 3), np.uint8)
     binary_full = cv2.morphologyEx(binary_full, cv2.MORPH_OPEN, kernel)
 
     # Find contours
@@ -204,17 +218,28 @@ def binarize_new(image):
         # Dilate the contour
         dilated_mask = cv2.dilate(contour_mask, kernel, iterations=1)
 
-        # Find bounding rectangle of the dilated mask
+        # Find bounding rectangle of the dilated mask and crop
         x, y, w, h = cv2.boundingRect(dilated_mask)
-
-        # Crop the original image to the bounding box
         cropped_region = image[y:y+h, x:x+w]
         cropped_dilated_mask = dilated_mask[y:y+h, x:x+w]
 
-        enhance_contrast = 10
+        # use low value
+        enhance_contrast = 3
         cropped_region = np.clip(cropped_region.astype(np.int32) * enhance_contrast, 0, 255).astype(np.uint8)
 
-        # Apply triangle thresholding to the masked region
+        # Use unsharp to enhance specific region (instead of enhance), dynamically adjust radius
+        radius = max(1, int(min(w, h) * 0.025)) # using small % bcs smaller radius captures more detail
+        # print(radius)
+        # Found that instead of calculating contrast dynamically, use high contrast at this stage since focusing on one component
+        # and want to preserve as much detail
+        # contrast = np.std(cropped_region)
+        # print(contrast)
+        # amount = np.clip((contrast / 5), 3, 6)
+        # print(thresh)
+        region_thresh = ski.filters.threshold_triangle(cropped_region)
+        cropped_region = (unsharp_mask(cropped_region, radius=radius, amount=region_thresh) * 255).astype(np.uint8)
+
+        # Apply local thresholding to the masked region
         block_size = w//2
         if block_size%2 == 0:
             block_size = block_size + 1
@@ -222,6 +247,15 @@ def binarize_new(image):
         binary_region = cropped_region > thresh
         binary_region = (binary_region * 255).astype(np.uint8)
 
+        # Open to reduce noise, close to fill in gaps (helpful bcs setting contrast high preserves detail but leads to gaps)
+        kernel = np.ones((3, 3), np.uint8)
+        # print(iterations)
+        binary_region = cv2.morphologyEx(binary_region, cv2.MORPH_CLOSE, kernel)
+        binary_region = cv2.morphologyEx(binary_region, cv2.MORPH_OPEN, kernel)
+        # binary_region = cv2.bilateralFilter(binary_region, d=3, sigmaColor=80, sigmaSpace=25)
+
+
+        # No change to Ethan's binarize from this point
         # Label connected components in binary_region
         labeled_region, num_features = label(binary_region)
 
@@ -242,9 +276,9 @@ def binarize_new(image):
 
     # Fill holes
     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
     # Compute sizes (areas) of all detected particles
     particle_sizes = np.array([cv2.contourArea(cnt) for cnt in contours])
+    # print(particle_sizes)
     size_thresh = ski.filters.threshold_triangle(particle_sizes)
 
     # Initialize the output mask
@@ -254,6 +288,237 @@ def binarize_new(image):
     for cnt in contours:
         if cv2.contourArea(cnt) > size_thresh:  # Only draw if the area is above the threshold
             cv2.drawContours(output_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+
+    # output_mask = remove_small_objects(output_mask.astype(bool), min_size=np.mean(particle_sizes) * 0.5).astype(np.uint8) * 255
+
+    binarized_img = (output_mask > 0).astype(np.uint8) * 255
+    return binarized_img
+
+def binarize_new2(image):
+    x, y, w, h = cv2.boundingRect(image)
+
+    # # Getting unsharp image - dynamic radius/amount parameters
+    # radius = max(1, int(min(w, h) * 0.12)) # determines blur size, using higher % to preserve structure for entire img
+    # contrast = np.std(image)  # measuring contrast as std
+    # amount = np.clip((contrast / 50), 1, 3)  # normalize contrast to medium range - do not want over-sharpening for entire img yet
+    # image = (unsharp_mask(image, radius=radius, amount=amount) * 255).astype(np.uint8)
+
+    full_thresh = ski.filters.threshold_triangle(image)
+    # print(thresh)
+    # enhance = 3 if full_thresh < 5 else 2.5
+    # iterations = 3 if full_thresh < 5 else 2
+    # contrast = 4 if full_thresh < 5 else 5
+    binary_full = image > full_thresh
+    binary_full = (binary_full * 255).astype(np.uint8)
+
+    # print(full_thresh)
+
+    # Dilate
+    kernel = np.ones((2, 2), np.uint8)
+    binary_full = cv2.morphologyEx(binary_full, cv2.MORPH_OPEN, kernel)
+
+    # Find contours
+    contours, _ = cv2.findContours(binary_full, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Create a mask to store the filtered particles
+    final_mask = np.zeros_like(binary_full)
+
+    # Loop through contours and keep only large ones
+    for cnt in contours:
+        contour_mask = np.zeros_like(binary_full)
+        cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+
+        # Dilate the contour
+        dilated_mask = cv2.dilate(contour_mask, kernel, iterations=1)
+
+        # Find bounding rectangle of the dilated mask and crop
+        x, y, w, h = cv2.boundingRect(dilated_mask)
+        cropped_region = image[y:y+h, x:x+w]
+        cropped_dilated_mask = dilated_mask[y:y+h, x:x+w]
+
+        # use low value
+        enhance_contrast = 2.5
+        cropped_region = np.clip(cropped_region.astype(np.int32) * enhance_contrast, 0, 255).astype(np.uint8)
+
+        # Use unsharp to enhance specific region (instead of enhance), dynamically adjust radius
+        radius = max(1, int(min(w, h) * 0.02)) # using small % bcs smaller radius captures more detail
+        # print(radius)
+        # Found that instead of calculating contrast dynamically, use high contrast at this stage since focusing on one component
+        # and want to preserve as much detail
+        # contrast = np.std(cropped_region)
+        # print(contrast)
+        # amount = np.clip((contrast / 5), 3, 6)
+        # print(thresh)
+        region_thresh = ski.filters.threshold_triangle(cropped_region)
+        cropped_region = (unsharp_mask(cropped_region, radius=radius, amount=region_thresh) * 255).astype(np.uint8)
+
+        # Apply local thresholding to the masked region
+        block_size = w//2
+        if block_size%2 == 0:
+            block_size = block_size + 1
+        thresh = ski.filters.threshold_local(cropped_region, block_size=block_size)
+        binary_region = cropped_region > thresh
+        binary_region = (binary_region * 255).astype(np.uint8)
+
+        # Open to reduce noise, close to fill in gaps (helpful bcs setting contrast high preserves detail but leads to gaps)
+        kernel = np.ones((2, 2), np.uint8)
+        binary_region = cv2.morphologyEx(binary_region, cv2.MORPH_OPEN, kernel)
+        # print(iterations)
+        binary_region = cv2.morphologyEx(binary_region, cv2.MORPH_CLOSE, kernel, iterations=3)
+        # binary_region = cv2.bilateralFilter(binary_region, d=3, sigmaColor=80, sigmaSpace=25)
+
+
+        # No change to Ethan's binarize from this point
+        # Label connected components in binary_region
+        labeled_region, num_features = label(binary_region)
+
+        # Create an empty array to store the resulting components
+        kept_components = np.zeros_like(binary_region)
+
+        # Iterate through each component and check for overlap with cropped_dilated_mask
+        for i in range(1, num_features + 1):
+            # Create a mask for the current component
+            component_mask = (labeled_region == i)
+
+            # Check if there is any overlap with cropped_dilated_mask
+            if np.any(component_mask & cropped_dilated_mask):  # If overlap exists
+                kept_components[component_mask] = 255  # Keep the component
+
+        # Add the thresholded cropped region to the final mask at the correct location
+        final_mask[y:y+h, x:x+w] = cv2.bitwise_or(final_mask[y:y+h, x:x+w], kept_components)
+
+    # Fill holes
+    contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Compute sizes (areas) of all detected particles
+    particle_sizes = np.array([cv2.contourArea(cnt) for cnt in contours])
+    # print(particle_sizes)
+    size_thresh = ski.filters.threshold_triangle(particle_sizes)
+
+    # Initialize the output mask
+    output_mask = np.zeros_like(binary_full)
+
+    # Draw contours that have an area above the threshold
+    for cnt in contours:
+        if cv2.contourArea(cnt) > size_thresh:  # Only draw if the area is above the threshold
+            cv2.drawContours(output_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+
+    # output_mask = remove_small_objects(output_mask.astype(bool), min_size=np.mean(particle_sizes) * 0.5).astype(np.uint8) * 255
+
+    binarized_img = (output_mask > 0).astype(np.uint8) * 255
+    return binarized_img
+
+def binarize_new3(image):
+    x, y, w, h = cv2.boundingRect(image)
+
+    # Getting unsharp image - dynamic radius/amount parameters
+    radius = max(1, int(min(w, h) * 0.12)) # determines blur size, using higher % to preserve structure for entire img
+    contrast = np.std(image)  # measuring contrast as std
+    amount = np.clip((contrast / 50), 1, 3)  # normalize contrast to medium range - do not want over-sharpening for entire img yet
+    image = (unsharp_mask(image, radius=radius, amount=amount) * 255).astype(np.uint8)
+
+    full_thresh = ski.filters.threshold_triangle(image)
+    # print(thresh)
+    # enhance = 3 if full_thresh < 5 else 2.5
+    # iterations = 3 if full_thresh < 5 else 2
+    # contrast = 4 if full_thresh < 5 else 5
+    binary_full = image > full_thresh
+    binary_full = (binary_full * 255).astype(np.uint8)
+
+    # print(full_thresh)
+
+    # Dilate
+    kernel = np.ones((2, 2), np.uint8)
+    binary_full = cv2.morphologyEx(binary_full, cv2.MORPH_OPEN, kernel)
+
+    # Find contours
+    contours, _ = cv2.findContours(binary_full, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Create a mask to store the filtered particles
+    final_mask = np.zeros_like(binary_full)
+
+    # Loop through contours and keep only large ones
+    for cnt in contours:
+        contour_mask = np.zeros_like(binary_full)
+        cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+
+        # dilated_mask = contour_mask
+
+        # Dilate the contour
+        dilated_mask = cv2.dilate(contour_mask, kernel, iterations=1)
+
+        # Find bounding rectangle of the dilated mask and crop
+        x, y, w, h = cv2.boundingRect(dilated_mask)
+
+        cropped_region = image[y:y+h, x:x+w]
+        cropped_dilated_mask = dilated_mask[y:y+h, x:x+w]
+
+        # # use low value
+        # enhance_contrast = 2.5
+        # cropped_region = np.clip(cropped_region.astype(np.int32) * enhance_contrast, 0, 255).astype(np.uint8)
+
+        # Use unsharp to enhance specific region (instead of enhance), dynamically adjust radius
+        radius = max(1, int(min(w, h) * 0.03)) # using small % bcs smaller radius captures more detail
+        # print(radius)
+        # Found that instead of calculating contrast dynamically, use high contrast at this stage since focusing on one component
+        # and want to preserve as much detail
+        # contrast = np.std(cropped_region)
+        # print(contrast)
+        # amount = np.clip((contrast / 5), 3, 6)
+        # print(thresh)
+        region_thresh = ski.filters.threshold_triangle(cropped_region)
+        cropped_region = (unsharp_mask(cropped_region, radius=radius, amount=5) * 255).astype(np.uint8)
+
+        # Apply local thresholding to the masked region
+        block_size = w//2
+        if block_size%2 == 0:
+            block_size = block_size + 1
+        thresh = ski.filters.threshold_local(cropped_region, block_size=block_size)
+        binary_region = cropped_region > thresh
+        binary_region = (binary_region * 255).astype(np.uint8)
+
+        # Open to reduce noise, close to fill in gaps (helpful bcs setting contrast high preserves detail but leads to gaps)
+        kernel = np.ones((2, 2), np.uint8)
+        binary_region = cv2.morphologyEx(binary_region, cv2.MORPH_OPEN, kernel)
+        # print(iterations)
+        binary_region = cv2.morphologyEx(binary_region, cv2.MORPH_CLOSE, kernel, iterations=3)
+        # binary_region = cv2.bilateralFilter(binary_region, d=3, sigmaColor=80, sigmaSpace=25)
+        # binary_region = cv2.dilate(binary_region, kernel, iterations=1)
+
+        # No change to Ethan's binarize from this point
+        # Label connected components in binary_region
+        labeled_region, num_features = label(binary_region)
+
+        # Create an empty array to store the resulting components
+        kept_components = np.zeros_like(binary_region)
+
+        # Iterate through each component and check for overlap with cropped_dilated_mask
+        for i in range(1, num_features + 1):
+            # Create a mask for the current component
+            component_mask = (labeled_region == i)
+
+            # Check if there is any overlap with cropped_dilated_mask
+            if np.any(component_mask & cropped_dilated_mask):  # If overlap exists
+                kept_components[component_mask] = 255  # Keep the component
+
+        # Add the thresholded cropped region to the final mask at the correct location
+        final_mask[y:y+h, x:x+w] = cv2.bitwise_or(final_mask[y:y+h, x:x+w], kept_components)
+
+    # Fill holes
+    contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Compute sizes (areas) of all detected particles
+    particle_sizes = np.array([cv2.contourArea(cnt) for cnt in contours])
+    # print(particle_sizes)
+    size_thresh = ski.filters.threshold_triangle(particle_sizes)
+
+    # Initialize the output mask
+    output_mask = np.zeros_like(binary_full)
+
+    # Draw contours that have an area above the threshold
+    for cnt in contours:
+        if cv2.contourArea(cnt) > size_thresh:  # Only draw if the area is above the threshold
+            cv2.drawContours(output_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+
+    # output_mask = remove_small_objects(output_mask.astype(bool), min_size=np.mean(particle_sizes) * 0.5).astype(np.uint8) * 255
 
     binarized_img = (output_mask > 0).astype(np.uint8) * 255
     return binarized_img

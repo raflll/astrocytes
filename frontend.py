@@ -147,10 +147,10 @@ class FeatureVisualizationThread(QThread):
 
             # First image: Blended skeleton with binarized + bounding box
             blended_skeleton = self.blend_skeleton(binarized_colored, skeleton_image)
-            cv2.rectangle(blended_skeleton, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 255, 0), 2)
+            cv2.rectangle(blended_skeleton, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 255, 0), 1)
 
             # Second image: Unenhanced data with bounding box
-            cv2.rectangle(data_colored_original, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 255, 0), 2)
+            cv2.rectangle(data_colored_original, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 255, 0), 1)
 
             # Save temporary images for display
             temp_dir = "temp"
@@ -292,7 +292,7 @@ class ModernUI(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("pip install Bonsai")
+        self.setWindowTitle("Triangle Thresholding Is All You Need")
         self.setGeometry(100, 100, 1200, 800)
         self.set_dark_mode()
 
