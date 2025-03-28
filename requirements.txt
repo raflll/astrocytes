@@ -88,3 +88,4 @@ vl-convert-python==1.7.0
 xarray==2024.7.0
 zict==3.0.0
 zipp==3.21.0
+shap==0.47.1

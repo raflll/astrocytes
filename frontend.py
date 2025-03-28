@@ -16,6 +16,7 @@ from feature_comparison import *
 
 class ImageProcessingThread(QThread):
     progress_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str)
 
     def __init__(self, image_files, charts_enabled):
         super().__init__()
@@ -23,18 +24,42 @@ class ImageProcessingThread(QThread):
         self.charts_enabled = charts_enabled
 
     def run(self):
-        total_images = len(self.image_files)
-        self.progress_signal.emit(f"Processing images...")
+        try:
+            total_images = len(self.image_files)
+            self.progress_signal.emit(f"Processing images...")
 
-        process_directory(self.image_files)
-        print("Binarization complete")
-        binarized_path = "binarized_images"
-        skeleton_path = "skeletonized_images"
-        setup_extract_features(skeleton_path, binarized_path, self.image_files, False)
-        print("Features extracted to extracted_features")
-        if self.charts_enabled: charts(False)
+            # Process directory with error handling
+            try:
+                process_directory(self.image_files)
+                print("Binarization complete")
+            except Exception as e:
+                self.error_signal.emit(f"Error processing directory: {str(e)}")
+                return
 
-        self.progress_signal.emit("Processing Complete!")
+            binarized_path = "binarized_images"
+            skeleton_path = "skeletonized_images"
+
+            # Extract features with error handling
+            try:
+                setup_extract_features(skeleton_path, binarized_path, self.image_files, False)
+                print("Features extracted to extracted_features")
+            except Exception as e:
+                self.error_signal.emit(f"Error extracting features: {str(e)}")
+                return
+
+            # Generate charts if enabled
+            if self.charts_enabled:
+                try:
+                    charts(False)
+                except Exception as e:
+                    self.error_signal.emit(f"Error generating charts: {str(e)}")
+                    return
+
+            self.progress_signal.emit("Processing Complete!")
+        except Exception as e:
+            self.error_signal.emit(f"Unexpected error: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 class ModelTrainingThread(QThread):
     training_complete = pyqtSignal()
@@ -934,24 +959,44 @@ class ModernUI(QMainWindow):
 
     def process_images(self):
         if self.selected_folder:
-            self.status_label.setText("Processing images...")
-            self.progress_bar.show()
-            self.progress_bar.setRange(0, 0)  # Infinite progress bar
+            try:
+                self.status_label.setText("Processing images...")
+                self.progress_bar.show()
+                self.progress_bar.setRange(0, 0)  # Infinite progress bar
 
-            self.processing_thread = ImageProcessingThread(
-                self.selected_folder,
-                self.charts_enabled
-            )
-            self.processing_thread.progress_signal.connect(self.update_status)
-            self.processing_thread.finished.connect(self.processing_complete)
-            self.processing_thread.start()
+                self.processing_thread = ImageProcessingThread(
+                    self.selected_folder,
+                    self.charts_enabled
+                )
+                self.processing_thread.progress_signal.connect(self.update_status)
+                self.processing_thread.error_signal.connect(self.handle_error)
+                self.processing_thread.finished.connect(self.processing_complete)
+                self.processing_thread.start()
+            except Exception as e:
+                self.handle_error(f"Error starting processing: {str(e)}")
+
+    def handle_error(self, error_message):
+        """Handle errors from processing threads"""
+        self.status_label.setText(f"Error: {error_message}")
+        self.progress_bar.hide()
+        self.process_button.setEnabled(True)
+        print(f"Error: {error_message}")
+        import traceback
+        traceback.print_exc()
 
     def processing_complete(self):
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(100)
+        try:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+            self.process_button.setEnabled(True)
+        except Exception as e:
+            self.handle_error(f"Error completing processing: {str(e)}")
 
     def update_status(self, message):
-        self.status_label.setText(message)
+        try:
+            self.status_label.setText(message)
+        except Exception as e:
+            print(f"Error updating status: {str(e)}")
 
     def update_model_status(self, message):
         self.model_status_label.setText(message)
