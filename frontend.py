@@ -741,30 +741,78 @@ class ModernUI(QMainWindow):
         """)
         self.viz_layout = QGridLayout(self.viz_display_frame)
 
-        # Create labels for all four images
-        self.feature_image_label = QLabel("Original with skeleton overlay")
+        # Create containers for each image and its label
+        # Top left
+        top_left_container = QWidget()
+        top_left_layout = QVBoxLayout(top_left_container)
+        top_left_layout.setContentsMargins(0, 0, 0, 0)
+        top_left_layout.setSpacing(5)
+        
+        self.feature_title_label = QLabel("Original with Skeleton Overlay")
+        self.feature_title_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        self.feature_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        top_left_layout.addWidget(self.feature_title_label)
+        
+        self.feature_image_label = QLabel()
         self.feature_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.feature_image_label.setMinimumHeight(400)
-        self.viz_layout.addWidget(self.feature_image_label, 0, 0)
+        top_left_layout.addWidget(self.feature_image_label)
+        self.viz_layout.addWidget(top_left_container, 0, 0)
 
-        self.original_image_label = QLabel("Original image")
+        # Top right
+        top_right_container = QWidget()
+        top_right_layout = QVBoxLayout(top_right_container)
+        top_right_layout.setContentsMargins(0, 0, 0, 0)
+        top_right_layout.setSpacing(5)
+        
+        self.original_title_label = QLabel("Original Image")
+        self.original_title_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        self.original_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        top_right_layout.addWidget(self.original_title_label)
+        
+        self.original_image_label = QLabel()
         self.original_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.original_image_label.setMinimumHeight(400)
-        self.viz_layout.addWidget(self.original_image_label, 0, 1)
+        top_right_layout.addWidget(self.original_image_label)
+        self.viz_layout.addWidget(top_right_container, 0, 1)
 
-        self.enhanced_image_label = QLabel("Enhanced image")
+        # Bottom left
+        bottom_left_container = QWidget()
+        bottom_left_layout = QVBoxLayout(bottom_left_container)
+        bottom_left_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_left_layout.setSpacing(5)
+        
+        self.enhanced_title_label = QLabel("Enhanced Image")
+        self.enhanced_title_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        self.enhanced_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bottom_left_layout.addWidget(self.enhanced_title_label)
+        
+        self.enhanced_image_label = QLabel()
         self.enhanced_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.enhanced_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.enhanced_image_label.setMinimumHeight(400)
-        self.viz_layout.addWidget(self.enhanced_image_label, 1, 0)
+        bottom_left_layout.addWidget(self.enhanced_image_label)
+        self.viz_layout.addWidget(bottom_left_container, 1, 0)
 
-        self.skeleton_image_label = QLabel("Skeleton overlay")
+        # Bottom right
+        bottom_right_container = QWidget()
+        bottom_right_layout = QVBoxLayout(bottom_right_container)
+        bottom_right_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_right_layout.setSpacing(5)
+        
+        self.skeleton_title_label = QLabel("Skeleton Overlay")
+        self.skeleton_title_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        self.skeleton_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bottom_right_layout.addWidget(self.skeleton_title_label)
+        
+        self.skeleton_image_label = QLabel()
         self.skeleton_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.skeleton_image_label.setMinimumHeight(400)
-        self.viz_layout.addWidget(self.skeleton_image_label, 1, 1)
+        bottom_right_layout.addWidget(self.skeleton_image_label)
+        self.viz_layout.addWidget(bottom_right_container, 1, 1)
 
         # Feature stats section
         self.stats_frame = QFrame()
