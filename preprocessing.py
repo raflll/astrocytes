@@ -154,7 +154,7 @@ def process_image(file_path, binarized_dir, skeleton_dir):
 
         # Binarize image with error handling
         try:
-            binarize_image(str(file_path), str(binarized_path), method="2")
+            binarize_image(str(file_path), str(binarized_path), method="3")
         except Exception as e:
             print(f"Error binarizing image {file_path}: {str(e)}")
             return str(file_path.name), []

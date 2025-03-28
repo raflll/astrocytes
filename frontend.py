@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton,
                             QLabel, QFileDialog, QStyleFactory, QMainWindow,
                             QTabWidget, QFrame, QProgressBar, QHBoxLayout,
                             QScrollArea, QGridLayout, QSizePolicy)
-from PyQt6.QtGui import QPalette, QColor, QFont, QPixmap, QImage
+from PyQt6.QtGui import QPalette, QColor, QFont, QPixmap, QImage, QIcon
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from preprocessing import *
 from postprocessing import *
@@ -972,6 +972,17 @@ class ModernUI(QMainWindow):
 
         self.setPalette(dark_palette)
         QApplication.setStyle(QStyleFactory.create("Fusion"))
+        bonsai_icon_path = "icon.png"
+        QApplication.setWindowIcon(QIcon(bonsai_icon_path))
+        def set_dock_icon(icon_path):
+            from Foundation import NSApplication
+            from AppKit import NSImage, NSApplication, NSApplicationActivationPolicyRegular
+            img = NSImage.alloc().initByReferencingFile_(icon_path)
+            
+            if img:
+                NSApplication.sharedApplication().dockTile().setBadgeLabel_(img)
+        if sys.platform == "darwin":
+            set_dock_icon(bonsai_icon_path)
 
     def select_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
