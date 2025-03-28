@@ -741,8 +741,8 @@ class ModernUI(QMainWindow):
         """)
         self.viz_layout = QGridLayout(self.viz_display_frame)
 
-        # Feature visualization section
-        self.feature_image_label = QLabel("Binarized with skeleton overlay")
+        # Create labels for all four images
+        self.feature_image_label = QLabel("Original with skeleton overlay")
         self.feature_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.feature_image_label.setMinimumHeight(400)
@@ -754,11 +754,17 @@ class ModernUI(QMainWindow):
         self.original_image_label.setMinimumHeight(400)
         self.viz_layout.addWidget(self.original_image_label, 0, 1)
 
-        self.skeleton_image_label = QLabel("Enhanced image")
+        self.enhanced_image_label = QLabel("Enhanced image")
+        self.enhanced_image_label.setStyleSheet("color: #888888; font-size: 14px;")
+        self.enhanced_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.enhanced_image_label.setMinimumHeight(400)
+        self.viz_layout.addWidget(self.enhanced_image_label, 1, 0)
+
+        self.skeleton_image_label = QLabel("Skeleton overlay")
         self.skeleton_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.skeleton_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.skeleton_image_label.setMinimumHeight(400)
-        self.viz_layout.addWidget(self.skeleton_image_label, 1, 0, 1, 2)
+        self.viz_layout.addWidget(self.skeleton_image_label, 1, 1)
 
         # Feature stats section
         self.stats_frame = QFrame()
@@ -886,8 +892,14 @@ class ModernUI(QMainWindow):
         cv2.imwrite(original_cropped_path, original_cropped)
         cv2.imwrite(enhanced_cropped_path, enhanced_cropped)
 
-        # Display the skeleton overlay image (in feature_image_label spot)
-        pixmap = QPixmap(skeleton_cropped_path)
+        # Create layered images
+        # Layer 1: Original with skeleton overlay
+        layered_original = cv2.addWeighted(original_cropped, 0.7, skeleton_cropped, 0.3, 0)
+        layered_original_path = os.path.join(temp_dir, "layered_original.png")
+        cv2.imwrite(layered_original_path, layered_original)
+
+        # Display the layered original image (top left)
+        pixmap = QPixmap(layered_original_path)
         scaled_pixmap = pixmap.scaled(
             min(500, self.feature_image_label.width()),
             min(500, self.feature_image_label.height()),
@@ -897,7 +909,7 @@ class ModernUI(QMainWindow):
         self.feature_image_label.setPixmap(scaled_pixmap)
         self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Display the original image
+        # Display the original image (top right)
         pixmap = QPixmap(original_cropped_path)
         scaled_pixmap = pixmap.scaled(
             min(500, self.original_image_label.width()),
@@ -908,10 +920,21 @@ class ModernUI(QMainWindow):
         self.original_image_label.setPixmap(scaled_pixmap)
         self.original_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Display the enhanced image (in skeleton_image_label spot)
+        # Display the enhanced image (bottom left)
         pixmap = QPixmap(enhanced_cropped_path)
         scaled_pixmap = pixmap.scaled(
-            min(800, self.skeleton_image_label.width()),
+            min(500, self.enhanced_image_label.width()),
+            min(500, self.enhanced_image_label.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.enhanced_image_label.setPixmap(scaled_pixmap)
+        self.enhanced_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Display the skeleton overlay (bottom right)
+        pixmap = QPixmap(skeleton_cropped_path)
+        scaled_pixmap = pixmap.scaled(
+            min(500, self.skeleton_image_label.width()),
             min(500, self.skeleton_image_label.height()),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
