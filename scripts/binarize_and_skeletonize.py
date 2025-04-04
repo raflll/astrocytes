@@ -19,16 +19,16 @@ def get_image(input_path, unsharp=False):
 
 # Can set binarization method, using new method right now (2.13.25)
 def binarize(input_path, method="latest", plot=False):
+    
     if method == "latest":
         orig_image = get_image(input_path)
         x, y, w, h = cv2.boundingRect(orig_image)
 
-        # Getting nucleus image
         ch1_path = input_path.replace("ch2", "ch1")  # Assume same path structure
-        image_ch1 = get_image(ch1_path)
-        if image_ch1 is None:
+        nucleus_img = get_image(ch1_path)
+        if nucleus_img is None:
             raise FileNotFoundError(f"Could not find corresponding nucleus image: {ch1_path}")
-        ch1_thresh, _ = cv2.threshold(image_ch1, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
+        ch1_thresh, _ = cv2.threshold(nucleus_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
 
         # initial image sharpening
         image = (unsharp_mask(orig_image, radius=100, amount=2) * 255).astype(np.uint8)
@@ -60,13 +60,13 @@ def binarize(input_path, method="latest", plot=False):
             cropped_dilated_mask = dilated_mask[y:y+h, x:x+w]
 
             # Find low threshold (from nucleus image) to calculate both component and nucleus area
-            triangle_thresh, _ = cv2.threshold(image_ch1, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
+            triangle_thresh, _ = cv2.threshold(nucleus_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
             # Component area
             _, component_bin = cv2.threshold(orig_image[y:y+h, x:x+w], triangle_thresh, 255, cv2.THRESH_BINARY)
             component_contours, _ = cv2.findContours(component_bin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             component_area = sum(cv2.contourArea(c) for c in component_contours)
             # Nucleus area
-            _, nucleus_bin = cv2.threshold(image_ch1[y:y+h, x:x+w], triangle_thresh, 255, cv2.THRESH_BINARY)
+            _, nucleus_bin = cv2.threshold(nucleus_img[y:y+h, x:x+w], triangle_thresh, 255, cv2.THRESH_BINARY)
             nucleus_contours, _ = cv2.findContours(nucleus_bin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             nucleus_area = sum(cv2.contourArea(c) for c in nucleus_contours)
 
@@ -96,12 +96,52 @@ def binarize(input_path, method="latest", plot=False):
             for i in range(1, num_features + 1):
                 # Create a mask for the current component
                 component_mask = (labeled_region == i)
-                # Overlap with cropped_dilated_mask (component before binarize) and nucleus (corresponding region in image_ch1)
-                if (np.any(component_mask & cropped_dilated_mask) and np.any(component_mask & (image_ch1[y:y+h, x:x+w] > ch1_thresh))):
+
+                # Check if there is any overlap with cropped_dilated_mask
+                if (np.any(component_mask & cropped_dilated_mask) and np.any(component_mask & (nucleus_img[y:y+h, x:x+w] > ch1_thresh))):
+
                     kept_components[component_mask] = 255  # Keep the component
+                    # plt.figure(figsize=(15, 10))
+
+                    # Plot orig_image region
+                    # plt.subplot(1, 4, 1)
+                    # plt.imshow(orig_image[y:y+h, x:x+w], cmap='gray')
+                    # plt.title('orig_image Region')
+                    # plt.axis('off')
+
+                    # # Plot nucleus_img region
+                    # plt.subplot(1, 4, 2)
+                    # plt.imshow(nucleus_img[y:y+h, x:x+w], cmap='gray')
+                    # plt.title('nucleus_img Region')
+                    # plt.axis('off')
+
+                    # # Plot cropped_dilated_mask
+                    # plt.subplot(1, 4, 3)
+                    # plt.imshow(cropped_dilated_mask, cmap='gray')
+                    # plt.title('cropped_dilated_mask')
+                    # plt.axis('off')
+
+                    # # Plot component_mask
+                    # plt.subplot(1, 4, 4)
+                    # plt.imshow(component_mask, cmap='gray')
+                    # plt.title('Component Mask')
+                    # plt.axis('off')
+
+                    plt.show()
 
             # Add the thresholded cropped region to the final mask at the correct location
             final_mask[y:y+h, x:x+w] = cv2.bitwise_or(final_mask[y:y+h, x:x+w], kept_components)
+        
+        contours, hierarchy = cv2.findContours(final_mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+
+        for i, cnt in enumerate(contours):
+            # Check if it is a hole (hierarchy[i][3] != -1 means it's inside another contour)
+            if hierarchy[0][i][3] != -1:  # It's a hole
+                contour_area = cv2.contourArea(cnt)  # Calculate the area of the contour
+                
+                # Only fill if the hole is smaller than the specified threshold
+                if contour_area < 75:
+                    cv2.drawContours(final_mask, [cnt], -1, 255, thickness=cv2.FILLED)  # Fill the hole
 
         binarized_img = (final_mask > 0).astype(np.uint8) * 255
         
