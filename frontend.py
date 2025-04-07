@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton,
                             QLabel, QFileDialog, QStyleFactory, QMainWindow,
                             QTabWidget, QFrame, QProgressBar, QHBoxLayout,
                             QScrollArea, QGridLayout, QSizePolicy)
-from PyQt6.QtGui import QPalette, QColor, QFont, QPixmap, QImage
+from PyQt6.QtGui import QPalette, QColor, QFont, QPixmap, QImage, QIcon
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from preprocessing import *
 from postprocessing import *
@@ -98,6 +98,13 @@ class FeatureVisualizationThread(QThread):
             skeleton_image_path = self.find_skeleton_file(file_name)
             binarized_image_path = self.find_binarized_file(file_name)
 
+            # Look for ch1 counterpart if this is a ch2 image
+            ch1_image_path = self.find_ch1_counterpart(file_name) if 'ch2' in file_name else None
+            if ch1_image_path:
+                self.progress_signal.emit(f"Found ch1 counterpart: {os.path.basename(ch1_image_path)}")
+            else:
+                self.progress_signal.emit("No ch1 counterpart found for overlay")
+
             if not (data_image_path and skeleton_image_path and binarized_image_path):
                 self.progress_signal.emit("Could not find all necessary image files!")
                 return
@@ -145,8 +152,8 @@ class FeatureVisualizationThread(QThread):
             # Get the bounding box for the feature
             x, y, w, h = cv2.boundingRect(component_mask)
 
-            # First image: Blended skeleton with binarized + bounding box
-            blended_skeleton = self.blend_skeleton(binarized_colored, skeleton_image)
+            # First image: Blended skeleton with binarized + ch1 overlay + bounding box
+            blended_skeleton = self.blend_skeleton_with_ch1_overlay(binarized_colored, skeleton_image, ch1_image_path)
             cv2.rectangle(blended_skeleton, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 255, 0), 1)
 
             # Second image: Unenhanced data with bounding box
@@ -182,7 +189,8 @@ class FeatureVisualizationThread(QThread):
                 'x': x,
                 'y': y,
                 'width': w,
-                'height': h
+                'height': h,
+                'has_ch1_overlay': ch1_image_path is not None
             }
 
             self.progress_signal.emit("Feature visualization ready!")
@@ -192,6 +200,89 @@ class FeatureVisualizationThread(QThread):
             self.progress_signal.emit(f"Error during visualization: {str(e)}")
             import traceback
             traceback.print_exc()
+
+    def find_ch1_counterpart(self, ch2_filename):
+        """Find the ch1 counterpart of a ch2 file by replacing 'ch2' with 'ch1' in the filename"""
+        if 'ch2' in ch2_filename:
+            ch1_filename = ch2_filename.replace('ch2', 'ch1')
+
+            # Look in the same directories we check for other image files
+            data_dirs = ["data", "data/Images"]
+
+            for data_dir in data_dirs:
+                if not os.path.exists(data_dir):
+                    continue
+
+                # Check if the file exists directly in the directory
+                path = os.path.join(data_dir, ch1_filename)
+                if os.path.exists(path):
+                    return path
+
+                # Also check subdirectories if any
+                for root, dirs, files in os.walk(data_dir):
+                    if ch1_filename in files:
+                        return os.path.join(root, ch1_filename)
+
+        return None
+
+    def blend_skeleton_with_ch1_overlay(self, original, skeleton, ch1_image_path):
+        """
+        Blend the original binarized image with skeleton and overlay ch1 (nucleus) in blue
+
+        Args:
+            original: The original binarized image (BGR format)
+            skeleton: The skeleton image (grayscale)
+            ch1_image_path: Path to the ch1 version of the image
+
+        Returns:
+            Blended image with ch1 overlay in blue
+        """
+        # Create a copy of the original
+        og = original.copy()
+
+        # Now add the ch1 overlay in light blue if available
+        if ch1_image_path and os.path.exists(ch1_image_path):
+            try:
+                # Load the ch1 image
+                ch1_img = cv2.imread(ch1_image_path, cv2.IMREAD_GRAYSCALE)
+
+                if ch1_img is not None:
+                    # Resize ch1 to match original if needed
+                    if ch1_img.shape != original.shape[:2]:
+                        ch1_img = cv2.resize(ch1_img, (original.shape[1], original.shape[0]))
+
+                    # Binarize the ch1 image if it's not already
+                    _, ch1_binary = cv2.threshold(ch1_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+                    # Extract white regions from the original (non-black pixels)
+                    white_mask = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY) > 0
+
+                    # Create a copy for the blue-tinted result
+                    tinted_img = og.copy()
+
+                    # 1. Apply LIGHT BLUE tint where white areas and ch1 overlap
+                    overlap_mask = np.logical_and(white_mask, ch1_binary > 0)
+                    tinted_img[overlap_mask] = np.array([255, 200, 100], dtype=np.uint8)  # Light blue (B,G,R)
+
+                    # 2. Apply DARKER BLUE tint where ch1 exists but no white (ch1-only areas)
+                    ch1_only_mask = np.logical_and(ch1_binary > 0, ~white_mask)
+                    tinted_img[ch1_only_mask] = np.array([180, 70, 30], dtype=np.uint8)  # Darker blue (B,G,R)
+
+                    # Apply red color to skeleton pixels on top of everything
+                    skeleton_mask = skeleton > 0
+                    tinted_img[skeleton_mask] = [0, 0, 255]  # Red color for skeleton
+
+                    return tinted_img
+
+            except Exception as e:
+                print(f"Error blending ch1 overlay: {str(e)}")
+
+        # If no ch1 overlay was applied, just add the red skeleton to the original
+        skeleton_mask = skeleton > 0
+        og[skeleton_mask] = [0, 0, 255]  # Red color for skeleton
+
+        # Return the original with skeleton overlay if ch1 blending failed
+        return og
 
     def blend_skeleton(self, original, skeleton):
         # Create a copy of the original
@@ -717,7 +808,7 @@ class ModernUI(QMainWindow):
         self.viz_layout = QGridLayout(self.viz_display_frame)
 
         # Feature visualization section
-        self.feature_image_label = QLabel("Binarized with skeleton overlay")
+        self.feature_image_label = QLabel("Binarized with skeleton and nucleus overlay")
         self.feature_image_label.setStyleSheet("color: #888888; font-size: 14px;")
         self.feature_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.feature_image_label.setMinimumHeight(400)
@@ -840,6 +931,8 @@ class ModernUI(QMainWindow):
 
         # Display feature source information more prominently
         source_info = f"Feature from: {os.path.basename(stats['file_name'])}"
+        if stats.get('has_ch1_overlay', False):
+            source_info += " (with ch1 nucleus overlay)"
         self.viz_status_label.setText(source_info)
 
         # Get bounding box coordinates for cropping
@@ -860,6 +953,12 @@ class ModernUI(QMainWindow):
         cv2.imwrite(skeleton_cropped_path, skeleton_cropped)
         cv2.imwrite(original_cropped_path, original_cropped)
         cv2.imwrite(enhanced_cropped_path, enhanced_cropped)
+
+        # Update labels based on whether ch1 overlay is present
+        if stats.get('has_ch1_overlay', False):
+            self.feature_image_label.setText("Binarized with skeleton (red) and nucleus overlay (blue)")
+        else:
+            self.feature_image_label.setText("Binarized with skeleton overlay")
 
         # Display the skeleton overlay image (in feature_image_label spot)
         pixmap = QPixmap(skeleton_cropped_path)
@@ -923,6 +1022,8 @@ class ModernUI(QMainWindow):
         dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
 
         self.setPalette(dark_palette)
+        bonsai_icon_path = "icon.png"
+        QApplication.setWindowIcon(QIcon(bonsai_icon_path))
         QApplication.setStyle(QStyleFactory.create("Fusion"))
 
     def select_folder(self):
