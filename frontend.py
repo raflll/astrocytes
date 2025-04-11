@@ -50,6 +50,33 @@ class ModelTrainingThread(QThread):
         self.progress_signal.emit(f"Training {self.model_name} model complete!")
         self.training_complete.emit()
 
+class ChartsLoadingThread(QThread):
+    loading_complete = pyqtSignal(list)
+    progress_signal = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+
+    def run(self):
+        self.progress_signal.emit("Loading charts...")
+
+        charts_dir = "charts"
+        if not os.path.exists(charts_dir):
+            self.progress_signal.emit("Charts directory not found. Generate charts first.")
+            self.loading_complete.emit([])
+            return
+
+        chart_files = [f for f in os.listdir(charts_dir) if f.endswith('.png')]
+
+        if not chart_files:
+            self.progress_signal.emit("No charts found. Generate charts first.")
+            self.loading_complete.emit([])
+            return
+
+        chart_paths = [os.path.join(charts_dir, f) for f in chart_files]
+        self.progress_signal.emit(f"Found {len(chart_paths)} charts")
+        self.loading_complete.emit(chart_paths)
+
 class FeatureVisualizationThread(QThread):
     visualization_complete = pyqtSignal(dict)
     progress_signal = pyqtSignal(str)
@@ -380,6 +407,7 @@ class ModernUI(QMainWindow):
         self.processing_thread = None
         self.training_thread = None
         self.visualization_thread = None
+        self.charts_loading_thread = None  # Add this line
         self.init_ui()
 
     def init_ui(self):
@@ -417,20 +445,46 @@ class ModernUI(QMainWindow):
             }
         """)
 
+        # Create tab widget
+        tabs = QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #3d3d3d;
+                background: #2b2b2b;
+                border-radius: 5px;
+            }
+            QTabBar::tab {
+                background: #353535;
+                color: #ffffff;
+                padding: 10px 20px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: #2b2b2b;
+                border-bottom: 2px solid #0078d4;
+            }
+            QTabBar::tab:hover {
+                background: #404040;
+            }
+        """)
+
         # Create tabs
         files_tab = QWidget()
-        stats_tab = QWidget()
         viz_tab = QWidget()
+        charts_tab = QWidget()  # Create the charts tab
 
         self.setup_files_tab(files_tab)
-        self.setup_stats_tab(stats_tab)
         self.setup_viz_tab(viz_tab)
+        self.setup_charts_tab(charts_tab)  # Set up the charts tab
 
         tabs.addTab(files_tab, "Files")
-        # tabs.addTab(stats_tab, "Statistics")
         tabs.addTab(viz_tab, "Visualizations")
+        tabs.addTab(charts_tab, "Charts")  # Add the charts tab to the tab widget
 
         layout.addWidget(tabs)
+
 
         # Create a QLabel for the icon in the bottom right corner
         self.icon_label = QLabel(self)
@@ -1142,3 +1196,174 @@ class ModernUI(QMainWindow):
 
             if not found_class_plots:
                 self.shap_plot_label.setText(f"SHAP plot not found ({shap_path})")
+
+    def setup_charts_tab(self, tab):
+        layout = QVBoxLayout(tab)
+
+        # Status frame for charts
+        charts_status_frame = QFrame()
+        charts_status_frame.setStyleSheet("""
+            QFrame {
+                background: #333333;
+                border-radius: 10px;
+                padding: 20px;
+                margin-bottom: 20px;
+            }
+        """)
+        charts_status_layout = QVBoxLayout(charts_status_frame)
+
+        # Status label for charts
+        self.charts_status_label = QLabel("No charts loaded")
+        self.charts_status_label.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-size: 14px;
+                padding: 10px;
+            }
+        """)
+        self.charts_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        charts_status_layout.addWidget(self.charts_status_label)
+
+        # Refresh charts button
+        button_style = """
+            QPushButton {
+                background-color: #0078d4;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px;
+                font-size: 14px;
+                margin: 5px;
+            }
+            QPushButton:hover {
+                background-color: #1084d8;
+            }
+            QPushButton:pressed {
+                background-color: #006cbd;
+            }
+            QPushButton:disabled {
+                background-color: #454545;
+                color: #888888;
+            }
+        """
+
+        self.load_charts_button = QPushButton("Load Charts")
+        self.load_charts_button.setStyleSheet(button_style)
+        self.load_charts_button.clicked.connect(self.load_charts)
+        charts_status_layout.addWidget(self.load_charts_button)
+
+        layout.addWidget(charts_status_frame)
+
+        # Create a scroll area for charts
+        self.charts_scroll_area = QScrollArea()
+        self.charts_scroll_area.setWidgetResizable(True)
+        self.charts_scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #2b2b2b;
+                width: 10px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #555555;
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        # Charts display frame (inside scroll area)
+        self.charts_display_frame = QFrame()
+        self.charts_display_frame.setStyleSheet("""
+            QFrame {
+                background: #333333;
+                border-radius: 10px;
+                padding: 20px;
+            }
+        """)
+        self.charts_layout = QVBoxLayout(self.charts_display_frame)
+
+        # Set the charts display frame as the widget for the scroll area
+        self.charts_scroll_area.setWidget(self.charts_display_frame)
+        layout.addWidget(self.charts_scroll_area)
+
+    def load_charts(self):
+        self.charts_status_label.setText("Loading charts...")
+        self.load_charts_button.setEnabled(False)
+
+        # Clear any existing charts in the display
+        for i in reversed(range(self.charts_layout.count())):
+            widget = self.charts_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        # Optionally regenerate the charts by calling the charts function
+        try:
+            self.charts_status_label.setText("Regenerating charts...")
+            # This will regenerate the charts using your updated charts.py
+            charts(False)
+        except Exception as e:
+            self.charts_status_label.setText(f"Error regenerating charts: {str(e)}")
+
+        # Start the charts loading thread to load the fresh charts
+        self.charts_loading_thread = ChartsLoadingThread()
+        self.charts_loading_thread.progress_signal.connect(self.update_charts_status)
+        self.charts_loading_thread.loading_complete.connect(self.display_charts)
+        self.charts_loading_thread.start()
+
+    def update_charts_status(self, message):
+        """Updates the charts status label"""
+        self.charts_status_label.setText(message)
+
+    def display_charts(self, chart_paths):
+        """Displays the charts"""
+        # Re-enable the button
+        self.load_charts_button.setEnabled(True)
+
+        if not chart_paths:
+            return
+
+        # Update status
+        self.charts_status_label.setText(f"Displaying {len(chart_paths)} charts")
+
+        # Display each chart
+        for path in chart_paths:
+            # Create a frame for each chart
+            chart_frame = QFrame()
+            chart_frame.setStyleSheet("""
+                QFrame {
+                    background: #3d3d3d;
+                    border-radius: 10px;
+                    padding: 15px;
+                    margin-bottom: 15px;
+                }
+            """)
+            chart_layout = QVBoxLayout(chart_frame)
+
+            # Add chart title
+            chart_title = QLabel(os.path.basename(path).replace('.png', ''))
+            chart_title.setStyleSheet("color: #ffffff; font-size: 16px; font-weight: bold;")
+            chart_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chart_layout.addWidget(chart_title)
+
+            # Add chart image
+            chart_label = QLabel()
+            pixmap = QPixmap(path)
+            scaled_pixmap = pixmap.scaled(
+                min(800, self.charts_scroll_area.width() - 60),
+                pixmap.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            chart_label.setPixmap(scaled_pixmap)
+            chart_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chart_layout.addWidget(chart_label)
+
+            # Add the chart frame to the layout
+            self.charts_layout.addWidget(chart_frame)

@@ -1,10 +1,6 @@
 import pandas as pd
 import os
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-import shap
 
 # Force matplotlib to use a thread-safe backend from the very beginning
 import matplotlib
@@ -16,7 +12,7 @@ plt.ioff()
 
 def charts(visuals=False):
     """
-    Generate colorful charts from feature CSV files.
+    Generate charts with a style similar to plot.py from feature CSV files.
     This function is designed to be thread-safe and avoid matplotlib GUI issues.
 
     Args:
@@ -34,9 +30,6 @@ def charts(visuals=False):
             "Phenotype_2": "whole_image_features/Phenotype 2_features.csv",
             "Images": "whole_image_features/Images_features.csv"
         }
-
-        # Define a colorful palette for the bars
-        colors = ['#FF5733', '#33FF57', '#3357FF', '#F033FF']  # Vibrant colors
 
         # Create the 'charts' directory if it does not exist
         charts_dir = "charts"
@@ -116,9 +109,19 @@ def charts(visuals=False):
 
                 if not values.empty:
                     # Calculate mean and standard deviation
-                    column_stats[col] = (values.mean(), values.std(ddof=1))
+                    column_stats[col] = {
+                        'mean': values.mean(),
+                        'std': values.std(ddof=1),
+                        'sem': values.std(ddof=1) / np.sqrt(len(values)),
+                        'values': values.tolist()  # Store all individual values for scatter plots
+                    }
                 else:
-                    column_stats[col] = (0, 0)
+                    column_stats[col] = {
+                        'mean': 0,
+                        'std': 0,
+                        'sem': 0,
+                        'values': []
+                    }
 
             data_stats[name] = column_stats
 
@@ -128,84 +131,108 @@ def charts(visuals=False):
             if name in data_stats:
                 features.update(data_stats[name].keys())
 
-        # Set a colorful style for matplotlib
-        plt.style.use('ggplot')
+        # Set matplotlib style to be minimalist like in plot.py
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.sans-serif'] = ['Arial']
+        plt.rcParams['axes.spines.right'] = False
+        plt.rcParams['axes.spines.top'] = False
 
         # Process each feature one by one
         for feature in features:
             # Explicitly create a new figure for each feature to avoid any state leakage
-            fig = plt.figure(figsize=(14, 8))
+            fig, ax = plt.subplots(figsize=(6, 5))
 
             try:
-                # Create a gradient background
-                ax = plt.gca()
-                ax.set_facecolor('#f8f9fa')  # Light background color
+                # Set background color to white
+                ax.set_facecolor('white')
+                fig.patch.set_facecolor('white')
 
-                # Set positions for bars
-                index = np.arange(len(dataframes))
+                # Set positions for the groups with some spacing
+                num_groups = len(dataframes)
+                positions = np.linspace(0.2, 0.2 + (num_groups-1)*0.5, num_groups)
+                width = 0.2
 
-                # Collect data for this feature
-                means = []
-                stds = []
+                # For jitter in scatter plot
+                jitter_amount = 0.08
+                np.random.seed(42)  # For reproducibility
 
-                for name in dataframes:
-                    if name in data_stats and feature in data_stats[name]:
-                        mean, std = data_stats[name][feature]
-                    else:
-                        mean, std = 0, 0
+                # For tracking y max value to place significance markers
+                y_max = 0
 
-                    means.append(mean)
-                    stds.append(std)
+                # Colors for each condition (alternating between white and black for scatter points)
+                scatter_colors = ['white', 'black', 'white', 'black']
+                scatter_edge_colors = ['black', 'black', 'black', 'black']
 
-                # Calculate y-axis limits to avoid squished appearance
-                if means:
-                    ymax = max(means) * 1.25  # Allow 25% headroom above the tallest bar
-                    plt.ylim(0, ymax)
+                # Plot each group's data
+                for i, (name, stats) in enumerate(data_stats.items()):
+                    if feature in stats:
+                        feat_stats = stats[feature]
+                        mean_val = feat_stats['mean']
+                        sem_val = feat_stats['sem']
+                        values = feat_stats['values']
 
-                # Create the bar plot with different colors for each bar
-                bars = plt.bar(index, means, 0.6, alpha=0.85,
-                            color=colors[:len(dataframes)],
-                            edgecolor='black', linewidth=1.2)
+                        # Update y_max
+                        if values:
+                            y_max = max(y_max, max(values))
 
-                # Add colorful error bars
-                for i, (mean, std) in enumerate(zip(means, stds)):
-                    lower_error = min(mean, std)  # Limit lower error to the mean value (avoid negative)
-                    upper_error = std
-                    plt.errorbar(index[i], mean, yerr=[[lower_error], [upper_error]],
-                                fmt='none', ecolor='#404040', capsize=6, capthick=2,
-                                elinewidth=2)
+                        # Create jittered x positions
+                        jittered_x = np.ones(len(values)) * positions[i] + np.random.uniform(-jitter_amount, jitter_amount, len(values))
 
-                # Add value labels inside the bars at the bottom
-                for bar in bars:
-                    height = bar.get_height()
-                    plt.text(bar.get_x() + bar.get_width()/2., 0.01,
-                            f'{height:.2f}', ha='center', va='bottom',
-                            fontweight='bold', fontsize=10, color='black')
+                        # Plot individual data points with jitter
+                        scatter_color_idx = min(i, len(scatter_colors)-1)
+                        edge_color_idx = min(i, len(scatter_edge_colors)-1)
+                        ax.scatter(jittered_x, values, color=scatter_colors[scatter_color_idx],
+                                  edgecolor=scatter_edge_colors[edge_color_idx], s=50, zorder=1)
 
-                # Add a grid for better readability with custom style
-                plt.grid(axis='y', linestyle='--', alpha=0.7)
+                        # Plot mean lines (blue) with higher zorder to appear in front
+                        ax.plot([positions[i] - width/2, positions[i] + width/2],
+                               [mean_val, mean_val], color='blue', linewidth=2, zorder=3)
 
-                # Add labels and title with improved styling
-                plt.xlabel('Condition', fontsize=12, fontweight='bold')
-                plt.ylabel('Value', fontsize=12, fontweight='bold')
-                plt.title(f'Feature: {feature}', fontsize=16, fontweight='bold', pad=20)
-                plt.xticks(index, data_stats.keys(), fontsize=11, rotation=0)
+                        # Plot error bars (SEM) with higher zorder to appear in front
+                        ax.errorbar(positions[i], mean_val, yerr=sem_val, color='blue',
+                                   linewidth=2, capsize=4, capthick=2, zorder=3)
 
-                # Add a subtle box around the plot
-                ax.spines['top'].set_visible(True)
-                ax.spines['right'].set_visible(True)
-                ax.spines['bottom'].set_visible(True)
-                ax.spines['left'].set_visible(True)
-                for spine in ax.spines.values():
-                    spine.set_color('#888888')
-                    spine.set_linewidth(1)
+                # Add significance markers if we have more than one group
+                if len(data_stats) >= 2:
+                    # Add some padding to the top for the significance marker
+                    y_pos = y_max * 1.15
+
+                    # Draw the line connecting the groups and the star
+                    ax.plot([positions[0], positions[-1]], [y_pos, y_pos], color='black', linewidth=1)
+
+                    # If there are more than 2 groups, place star in middle, otherwise above the two
+                    middle_pos = (positions[0] + positions[-1]) / 2
+                    ax.text(middle_pos, y_pos * 1.05, '*', ha='center', va='center', fontsize=14)
+
+                # Set axis limits with room for significance markers
+                y_padding = y_max * 0.3  # 30% padding at top
+                ax.set_ylim(0, y_max + y_padding)
+
+                # Set nice y-axis ticks (4-5 ticks)
+                max_y_rounded = np.ceil(y_max * 4) / 4  # Round to nearest 0.25
+                ax.set_yticks(np.linspace(0, max_y_rounded, 4))
+                ax.set_yticklabels([f'{x:.2f}' for x in np.linspace(0, max_y_rounded, 4)])
+
+                # Set x-axis parameters
+                ax.set_xticks(positions)
+                ax.set_xticklabels(list(data_stats.keys()), rotation=45)
+                ax.set_xlim(min(positions) - 0.3, max(positions) + 0.3)
+
+                # Set axis labels
+                ax.set_ylabel(f'{feature}', fontsize=12)
+
+                # Make only left and bottom spines visible
+                ax.spines['right'].set_visible(False)
+                ax.spines['top'].set_visible(False)
+                ax.spines['left'].set_linewidth(1)
+                ax.spines['bottom'].set_linewidth(1)
 
                 # Ensure there's enough room for the title and labels
-                plt.tight_layout(rect=[0.05, 0.05, 0.95, 0.95])
+                plt.tight_layout()
 
-                # Save the plot with higher DPI for better quality
+                # Save the plot
                 chart_path = os.path.join(charts_dir, f"{feature}.png")
-                plt.savefig(chart_path, dpi=150)
+                plt.savefig(chart_path, dpi=300, bbox_inches='tight')
                 print(f"Created chart: {chart_path}")
 
                 # Always explicitly close the figure to release memory
@@ -217,7 +244,7 @@ def charts(visuals=False):
                 plt.close(fig)
                 continue
 
-        print(f"Generated colorful charts in {charts_dir} directory")
+        print(f"Generated charts in {charts_dir} directory")
         return charts_dir
 
     except Exception as e:
