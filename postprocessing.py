@@ -129,7 +129,7 @@ def get_features(image_path):
         "Phenotype 1": "extracted_features/Phenotype 1_features.csv",
         "Phenotype 2": "extracted_features/Phenotype 2_features.csv",
         "Control": "extracted_features/Control_features.csv",
-        "Images": "extracted_features/Image_features.csv"
+        "Images": "extracted_features/Images_features.csv"
     }
 
     # Search for the image in all CSV files

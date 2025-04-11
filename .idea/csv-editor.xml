@@ -38,6 +38,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="/whole_image_features/Images_features.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="/whole_image_features/Phenotype 1_features.csv">
           <value>
             <Attribute>
