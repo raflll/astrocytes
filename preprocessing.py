@@ -180,6 +180,7 @@ def bitwise_binarize(image_path, dapi_path, output_path):
 
 
 def binarize_image(image_path, dapi_path, output_path, method = "2"):
+    dapi_path = image_path.replace("ch2", "ch1")
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     image_ch1 = cv2.imread(dapi_path, cv2.IMREAD_GRAYSCALE)
 
@@ -419,7 +420,7 @@ def binarize_latest(orig_image, image_ch1):
     return binarized_img
 
 def apply_skeletonization(binarized_file, skeletonized_file):
-    PRUNE_SIZE = 3
+    PRUNE_SIZE = 10
 
     # load binarized image and convert to np.uint8
     img = cv2.imread(binarized_file, cv2.IMREAD_GRAYSCALE)
@@ -434,7 +435,6 @@ def apply_skeletonization(binarized_file, skeletonized_file):
     # Save to skeletonized file and return pruned skeleton
     cv2.imwrite(skeletonized_file, savable_pruned_skeleton)
     return pruned_complete_skeleton
-
 
 def extract_all_features(binarized_file, pruned_complete_skeleton):
     # load binarized image and convert to np.uint8
