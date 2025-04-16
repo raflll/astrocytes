@@ -266,6 +266,7 @@ class FeatureVisualizationThread(QThread):
         """
         # Create a copy of the original
         og = original.copy()
+        print(f"Original shape: {og.shape}, Skeleton shape: {skeleton.shape}")
 
         # Now add the ch1 overlay in light blue if available
         if ch1_image_path and os.path.exists(ch1_image_path):
