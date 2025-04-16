@@ -14,6 +14,7 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pandas as pd
+from skimage.morphology import (remove_small_objects, remove_small_holes, skeletonize)
 
 def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
     # Convert input path to Path object
@@ -111,13 +112,13 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
     # Save features to CSV files
     for f, folder in enumerate(all_features):
         if f == 0:
-            name = "extracted_features/Control_features.csv"
+            name = "extracted_features/Phenotype 1_features.csv"
         elif f == 1:
             name = "extracted_features/Images_features.csv"
         elif f == 2:
-            name = "extracted_features/Phenotype 1_features.csv"
-        elif f == 3:
             name = "extracted_features/Phenotype 2_features.csv"
+        elif f == 3:
+            name = "extracted_features/Control_features.csv"
         else:
             name = f"extracted_features/Folder_{f+1}_features.csv"
 
@@ -428,7 +429,7 @@ def apply_skeletonization(binarized_file, skeletonized_file):
 
     # Skeletonize and then prune image
     complete_skeleton = pcv.morphology.skeletonize(mask=binary_img)
-    pruned_complete_skeleton = pcv.morphology.prune(skel_img=complete_skeleton, size=PRUNE_SIZE)
+    pruned_complete_skeleton, _, _ = pcv.morphology.prune(skel_img=complete_skeleton, size=PRUNE_SIZE)
 
     savable_pruned_skeleton = (pruned_complete_skeleton[0] > 0).astype(np.uint8) * 255
 
@@ -439,10 +440,11 @@ def apply_skeletonization(binarized_file, skeletonized_file):
 def extract_all_features(binarized_file, pruned_complete_skeleton):
     # load binarized image and convert to np.uint8
     img = cv2.imread(binarized_file, cv2.IMREAD_GRAYSCALE)
-    binary_img = img.astype(np.uint8)
+    binarized_img = np.where(img > 0, 255, 0).astype(np.uint8)
+    skeleton_pruned = np.where(pruned_complete_skeleton > 0, 255, 0).astype(np.uint8)
 
     # Run connected componenets
-    num_labels, labels = cv2.connectedComponents(binary_img)
+    num_labels, labels = cv2.connectedComponents(binarized_img)
 
     # Make a list of all the labels
     labels_list = list(range(1, num_labels))  # Start from 1 to skip background
@@ -451,7 +453,7 @@ def extract_all_features(binarized_file, pruned_complete_skeleton):
 
     # Add the features from each feature to results
     for label in labels_list:
-        results.append((process_astrocyte(label, labels, pruned_complete_skeleton)))
+        results.append((process_astrocyte(label, labels, skeleton_pruned, binarized_img)))
 
     # Add reults to all features
     for r in results:
@@ -463,30 +465,41 @@ def extract_all_features(binarized_file, pruned_complete_skeleton):
             "total_skeleton_length": 0, "area": 0, "fractal_dim": 0, "perimeter": 0, "circularity": 0, "roundness": 0,
             "projection_lengths": [], "num_neighbors" : 0, "length_width_ratio" : 0}]
 
-def process_astrocyte(label, labels, pruned_complete_skeleton):
+def process_astrocyte(label, labels, pruned_complete_skeleton, binarized_img):
     # Extract mask of astrocyte
     astrocyte_mask = (labels == label).astype(np.uint8) * 255
 
-    if np.sum(astrocyte_mask) == 0:
-        return None # Skip empty masks
-
-    # Skeletonize individual astrocyte
-    individual_skeleton = pruned_complete_skeleton[0] & (astrocyte_mask > 0)
-
-    # Convert to format compatible with skan
-    skeleton_uint8 = (individual_skeleton > 0).astype(np.uint8) * 255
-
-    if np.sum(skeleton_uint8) == 0:
-        return None  # Skip empty skeletons
-
     try:
+        area = np.sum(binarized_img[astrocyte_mask > 0]) // 255
+
         # Feature extraction
-        skeleton_obj = Skeleton(skeleton_uint8)
-        skeleton_data = summarize(skeleton_obj, separator='-')
+        component_skeleton = cv2.bitwise_and(pruned_complete_skeleton, pruned_complete_skeleton, mask=astrocyte_mask)
 
         # Calculate perimeter
         contours, _ = cv2.findContours(astrocyte_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        perimeter = cv2.arcLength(contours[0], True) if len(contours) > 0 else 0
+        perimeter = sum(cv2.arcLength(cnt, True) for cnt in contours)
+
+        # method 1 to find number of projections, I find method 2 below to be more accurate
+        branch_pts = pcv.morphology.find_branch_pts(skel_img=component_skeleton)
+        num_projections = np.sum(branch_pts > 0) # number of projections
+
+        # Nikhita's FRACTAL DIMENSION - Add error handling for empty projections
+        try:
+            num_projs2, proj_lengths, avg_proj_length, max_proj_length = analyze_projections(component_skeleton)
+            # Handle case where proj_lengths might be empty
+            max_proj_length = max(proj_lengths) if proj_lengths else 0
+        except Exception as e:
+            print(f"Warning: Error in analyze_projections for label {label}: {str(e)}")
+            num_projs2, proj_lengths, avg_proj_length, max_proj_length = 0, [], 0, 0
+
+        # NEIGHBORS feature
+        neighbors = set()
+        kernel = np.ones((70, 70), np.uint8) # need to determine the area to consider for neighbors
+        dilated_mask = cv2.dilate(astrocyte_mask, kernel, iterations=1)
+        neighbors = np.unique(labels[dilated_mask > 0])
+        neighbors = neighbors[(neighbors != label) & (neighbors != 0)]  # removing current component and 0 (background)
+        # print(f"Neighbors after exclusion: {neighbors}")
+        num_neighbors = len(neighbors)
 
         # LENGTH/WIDTH RATIO feature
         x, y, width, height = cv2.boundingRect(astrocyte_mask)
@@ -494,15 +507,21 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
         width = min(width, height)
         length_width_ratio = length / width if width > 0 else 0
 
-        # Nikhita's FRACTAL DIMENSION
-        num_projs2, proj_lengths, avg_proj_length, max_proj_length = analyze_projections(skeleton_uint8)
-        if num_projs2 > 0:
-            fractal_dim = calculate_fractal_dimension(astrocyte_mask) # see function
-        else:
-            fractal_dim = 0 # astrocyte with no projections is not fractal, so FD does not apply
+        # FRACTAL DIMENSION feature
+        skel_x, skel_y, skel_width, skel_height = cv2.boundingRect(component_skeleton)
+        cropped_mask = component_skeleton[skel_y: skel_y + skel_height, skel_x: skel_x + skel_width]
 
-        if fractal_dim > 1.6: # function returned large fractal dimension for small, low-res images, so getting rid of them
-            fractal_dim = -1
+        try:
+            if num_projs2 > 0:
+                fractal_dim = calculate_fractal_dimension(astrocyte_mask) # see function
+            else:
+                fractal_dim = 0 # astrocyte with no projections is not fractal, so FD does not apply
+
+            if fractal_dim > 1.6: # function returned large fractal dimension for small, low-res images, so getting rid of them
+                fractal_dim = -1
+        except Exception as e:
+            print(f"Warning: Error calculating fractal dimension for label {label}: {str(e)}")
+            fractal_dim = 0
 
         # Nikhita's NEIGHBORS feature
         kernel = np.ones((70, 70), np.uint8) # need to determine the area to consider for neighbors
@@ -511,56 +530,104 @@ def process_astrocyte(label, labels, pruned_complete_skeleton):
         neighbors = neighbors[(neighbors != label) & (neighbors != 0)]  # removing current component and 0 (background)
         num_neighbors = len(neighbors)
 
+        component_skeleton = (component_skeleton > 0).astype(np.uint8)
+        try:
+            if np.sum(component_skeleton) == 0:
+                skeleton_data = None
+            else:
+                try:
+                    skeleton_data = summarize(Skeleton(component_skeleton), separator='-')
+                except ValueError:
+                    skeleton_data = None
+        except Exception as e:
+            print(f"Warning: Error creating skeleton data for label {label}: {str(e)}")
+            skeleton_data = None
 
-        # Collect features for this astrocyte
+        # Safety checks for skeleton_data
+        num_nodes = 0
+        num_branches = 0
+        branch_lengths = []
+        total_skeleton_length = 0
+
+        if skeleton_data is not None:
+            try:
+                num_nodes = skeleton_data["node-id-src"].nunique() + skeleton_data["node-id-dst"].nunique()
+            except Exception as e:
+                print(f"Warning: Error calculating num_nodes for label {label}: {str(e)}")
+
+            try:
+                num_branches = len(skeleton_data) if hasattr(skeleton_data, '__len__') else 0
+            except Exception as e:
+                print(f"Warning: Error calculating num_branches for label {label}: {str(e)}")
+
+            try:
+                branch_lengths = skeleton_data['branch-distance'].tolist() if (hasattr(skeleton_data, '__len__') and len(skeleton_data) > 0 and 'branch-distance' in skeleton_data) else []
+            except Exception as e:
+                print(f"Warning: Error calculating branch_lengths for label {label}: {str(e)}")
+
+            try:
+                total_skeleton_length = sum(skeleton_data['branch-distance']) if (hasattr(skeleton_data, '__len__') and len(skeleton_data) > 0 and 'branch-distance' in skeleton_data) else 0
+            except Exception as e:
+                print(f"Warning: Error calculating total_skeleton_length for label {label}: {str(e)}")
+
+        # Collect features for this astrocyte with robust error checking
         features = {
             "object_label": label,
-            'num_nodes': skeleton_data["node-id-src"].nunique() + skeleton_data["node-id-dst"].nunique() if skeleton_data is not None else 0,
-            "num_branches": len(skeleton_data) if len(skeleton_data) > 0 else 0,
-            "num_projections" : num_projs2,
-            "branch_lengths": skeleton_data['branch-distance'].tolist() if len(skeleton_data) > 0 else [],
-            "total_skeleton_length": sum(skeleton_data['branch-distance']) if len(skeleton_data) > 0 else 0,
-            "area": np.sum(astrocyte_mask > 0),
+            'num_nodes': num_nodes,
+            "num_branches": num_branches,
+            "num_projections": num_projs2,
+            "branch_lengths": branch_lengths,
+            "total_skeleton_length": total_skeleton_length,
+            "area": area,
             "fractal_dim": fractal_dim,
             "perimeter": perimeter,
-            "circularity": (4 * np.pi * np.sum(astrocyte_mask > 0)) / (perimeter ** 2) if perimeter > 0 else 0,
-            "roundness": perimeter**2 / (4 * math.pi * np.sum(astrocyte_mask > 0)),
-            "projection_lengths": proj_lengths,
-            "avg_projection_length": sum(proj_lengths) / len(proj_lengths),
-            "max_projection_length": max(proj_lengths),
-            "neighbors" : num_neighbors,
-            "length_width_ratio" : length_width_ratio,
-            # "mask" : astrocyte_mask
+            "circularity": (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0,
+            "roundness": perimeter**2 / (4 * math.pi * np.sum(astrocyte_mask > 0)) if np.sum(astrocyte_mask > 0) > 0 else 0,
+            "projection_lengths": proj_lengths if isinstance(proj_lengths, list) else [],
+            "avg_projection_length": sum(proj_lengths) / len(proj_lengths) if isinstance(proj_lengths, list) and len(proj_lengths) > 0 else 0,
+            "max_projection_length": max_proj_length,
+            "neighbors": num_neighbors,
+            "length_width_ratio": length_width_ratio,
+            # "mask": astrocyte_mask
         }
 
         # Return both features and the pruned skeleton
         return features
 
     except Exception as e:
-        # print(f"Warning: Error processing label {label}: {str(e)}")
+        print(f"Warning: Error processing label {label}: {str(e)}")
         return None
 
 def analyze_projections(skeleton_component):
+    try:
+        segments, objs = pcv.morphology.segment_skeleton(skel_img=skeleton_component)
 
-    segments, objs = pcv.morphology.segment_skeleton(skel_img=skeleton_component)
+        # segment sort seems pretty accurate, run debug to visualize
+        # pcv.params.debug = "plot"
+        projection_objs, body_objs = pcv.morphology.segment_sort(skel_img=skeleton_component,
+                                                      objects=objs)
+        # NUMBER OF PROJECTIONS feature
+        num_projs = len(projection_objs) if projection_objs is not None else 0
 
-    # segment sort seems pretty accurate, run debug to visualize
-    # pcv.params.debug = "plot"
-    projection_objs, body_objs = pcv.morphology.segment_sort(skel_img=skeleton_component,
-                                                  objects=objs)
-    # NUMBER OF PROJECTIONS feature
-    num_projs = len(projection_objs)
+        # getting ALL PROJECTION LENGTHS feature
+        pcv.params.sample_label = 'astrocyte'
+        try:
+            labeled_path_img = pcv.morphology.segment_path_length(segmented_img=segments, objects=projection_objs) # objs must be projections only
+            proj_lengths = pcv.outputs.observations['astrocyte']['segment_path_length']['value']
+            if proj_lengths is None:
+                proj_lengths = []
+        except Exception as e:
+            print(f"Warning: Error getting projection lengths: {str(e)}")
+            proj_lengths = []
 
-    # getting ALL PROJECTION LENGTHS feature
-    pcv.params.sample_label = 'astrocyte'
-    labeled_path_img = pcv.morphology.segment_path_length(segmented_img=segments, objects=projection_objs) # objs must be projections only
-    proj_lengths = pcv.outputs.observations['astrocyte']['segment_path_length']['value']
+        # AVG/MAX PROJECTION LENGTHS FEATURE
+        avg_proj_length = np.mean(proj_lengths) if proj_lengths and len(proj_lengths) > 0 else 0
+        max_proj_length = np.max(proj_lengths) if proj_lengths and len(proj_lengths) > 0 else 0
 
-    # AVG/MAX PROJECTION LENGTHS FEATURE
-    avg_proj_length = np.mean(proj_lengths) if proj_lengths else 0
-    max_proj_length = np.max(proj_lengths) if proj_lengths else 0
-
-    return num_projs, proj_lengths, avg_proj_length, max_proj_length
+        return num_projs, proj_lengths, avg_proj_length, max_proj_length
+    except Exception as e:
+        print(f"Warning: Error in analyze_projections: {str(e)}")
+        return 0, [], 0, 0
 
 def calculate_fractal_dimension(skeleton_img, min_box=1, max_box=None):
     # Computing fractal dimension w box counting, found to be the best method
