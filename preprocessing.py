@@ -512,7 +512,7 @@ def process_astrocyte(label, labels, pruned_complete_skeleton, binarized_img):
 
         try:
             if num_projs2 > 0:
-                fractal_dim = calculate_fractal_dimension(astrocyte_mask) # see function
+                fractal_dim = calculate_fractal_dimension(cropped_mask) # see function
             else:
                 fractal_dim = 0 # astrocyte with no projections is not fractal, so FD does not apply
 
