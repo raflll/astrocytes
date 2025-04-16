@@ -428,14 +428,13 @@ def apply_skeletonization(binarized_file, skeletonized_file):
     binary_img = img.astype(np.uint8)
 
     # Skeletonize and then prune image
-    complete_skeleton = pcv.morphology.skeletonize(mask=binary_img)
-    pruned_complete_skeleton, _, _ = pcv.morphology.prune(skel_img=complete_skeleton, size=PRUNE_SIZE)
+    skeleton = skeletonize(binary_img > 0).astype(np.uint8) * 255
+    skeleton_pruned, _, _ = pcv.morphology.prune(skel_img=skeleton, size=PRUNE_SIZE)
 
-    savable_pruned_skeleton = (pruned_complete_skeleton[0] > 0).astype(np.uint8) * 255
 
     # Save to skeletonized file and return pruned skeleton
-    cv2.imwrite(skeletonized_file, savable_pruned_skeleton)
-    return pruned_complete_skeleton
+    cv2.imwrite(skeletonized_file, skeleton_pruned)
+    return skeleton_pruned
 
 def extract_all_features(binarized_file, pruned_complete_skeleton):
     # load binarized image and convert to np.uint8
