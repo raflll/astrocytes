@@ -138,7 +138,7 @@ If you encounter issues:
 
 ## Credits
 
-This tool was developed by Bonsai ACG, a research group focused on astrocyte analysis and computational neuroscience.
+This tool was developed by Bonsai.
 
 ### Development Team
 - Justin Bonner
