@@ -130,31 +130,20 @@ Each feature CSV file contains:
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **No Images Found**
-   - Ensure images are in .tiff format
-   - Check that images are in the correct directory
-   - Verify image filenames follow the naming convention
-
-2. **Processing Errors**
-   - Check image quality and format
-   - Ensure sufficient disk space
-   - Verify all dependencies are installed
-
-3. **Memory Issues**
-   - Process smaller batches of images
-   - Close other applications
-   - Ensure sufficient RAM is available
-
 ### Getting Help
 If you encounter issues:
 1. Check the console output for error messages
 2. Verify your data organization follows the required structure
 3. Ensure all dependencies are correctly installed
 
-## Notes
-- The tool automatically cleans up old files before each processing run
-- Progress is saved in real-time
-- Feature extraction can be time-consuming for large datasets
-- Charts are generated after processing is complete 
+## Credits
+
+This tool was developed by Bonsai ACG, a research group focused on astrocyte analysis and computational neuroscience.
+
+### Development Team
+- Justin Bonner
+- Nikhita Guhan
+- Esteban Morales
+- Ethan Tieu
+
+Special thanks to all contributors for their work on the binarization algorithms, feature extraction methods, and visualization tools. 
