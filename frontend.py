@@ -13,28 +13,91 @@ from preprocessing import *
 from postprocessing import *
 from charts import *
 from feature_comparison import *
+import shutil
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 class ImageProcessingThread(QThread):
     progress_signal = pyqtSignal(str)
+    progress_value_signal = pyqtSignal(int)  # New signal for progress value
 
     def __init__(self, image_files, charts_enabled):
         super().__init__()
         self.image_files = image_files
         self.charts_enabled = charts_enabled
+        self.total_images = 0
+        self.processed_images = 0
+
+    def count_total_images(self):
+        """Count total number of images to process"""
+        total = 0
+        # Check if there are any subdirectories
+        subdirs = [x for x in Path(self.image_files).iterdir() if x.is_dir()]
+        
+        if subdirs:
+            # Process files in subdirectories
+            for subdir in subdirs:
+                for file_path in subdir.rglob("*"):
+                    # Skip files with "-ch1" in the filename
+                    if "-ch1" in file_path.name:
+                        continue
+                    if file_path.suffix.lower() in {".tiff", ".tif", ".png"}:
+                        total += 1
+        else:
+            # Process files in main directory only
+            for file_path in Path(self.image_files).glob("*"):
+                # Skip files with "-ch1" in the filename
+                if "-ch1" in file_path.name:
+                    continue
+                if file_path.suffix.lower() in {".tiff", ".tif", ".png"}:
+                    total += 1
+        return total
 
     def run(self):
-        total_images = len(self.image_files)
-        self.progress_signal.emit(f"Processing images...")
+        self.progress_signal.emit("Cleaning up old files...")
+        
+        # Clean up old files before processing
+        from preprocessing import cleanup_old_files
+        cleanup_old_files()
+        
+        # Count total images
+        self.total_images = self.count_total_images()
+        self.processed_images = 0
+        
+        if self.total_images == 0:
+            self.progress_signal.emit("No images found to process!")
+            return
 
-        process_directory(self.image_files)
+        self.progress_signal.emit(f"Processing {self.total_images} images...")
+        self.progress_value_signal.emit(0)  # Initialize progress bar
+
+        # Process the directory with progress callback
+        process_directory(self.image_files, progress_callback=self.progress_value_signal.emit)
+        self.progress_value_signal.emit(85)  # Set to 85% after binarization
+
         print("Binarization complete")
         binarized_path = "binarized_images"
         skeleton_path = "skeletonized_images"
         setup_extract_features(skeleton_path, binarized_path, self.image_files, False)
+        self.progress_value_signal.emit(95)  # Set to 95% after feature extraction
         print("Features extracted to extracted_features")
-        if self.charts_enabled: charts(False)
+        
+        if self.charts_enabled:
+            charts(False)
+            self.progress_value_signal.emit(98)  # Set to 98% after charts
 
         self.progress_signal.emit("Processing Complete!")
+        self.progress_value_signal.emit(100)  # Set progress to 100% when done
+
+    def update_progress(self, future):
+        """Update progress when an image is processed"""
+        try:
+            future.result()  # Get the result (this will raise any exceptions)
+            self.processed_images += 1
+            progress = int((self.processed_images / self.total_images) * 100)
+            self.progress_value_signal.emit(progress)
+        except Exception as e:
+            print(f"Error processing image: {str(e)}")
 
 class ModelTrainingThread(QThread):
     training_complete = pyqtSignal()
@@ -87,27 +150,26 @@ class FeatureVisualizationThread(QThread):
     def run(self):
         self.progress_signal.emit("Finding random feature...")
 
-        # Get all available feature CSV files
-        feature_files = []
+        # Find all feature CSV files in the extracted_features directory
         features_dir = "extracted_features"
-        images_file = os.path.join(features_dir, "Images_features.csv")
+        if not os.path.exists(features_dir):
+            self.progress_signal.emit("Features directory not found!")
+            return
 
-        if not os.path.exists(images_file):
-            # Try to find any file that might contain "Image" in its name
-            feature_files = [os.path.join(features_dir, f) for f in os.listdir(features_dir)
-                            if os.path.isfile(os.path.join(features_dir, f)) and
-                            ('Image' in f or 'image' in f) and f.endswith('_features.csv')]
-            if feature_files:
-                images_file = feature_files[0]
-            else:
-                self.progress_signal.emit("Images feature file not found!")
-                return
+        # Get all CSV files in the directory
+        csv_files = [f for f in os.listdir(features_dir) if f.endswith('_features.csv')]
+        if not csv_files:
+            self.progress_signal.emit("No feature files found!")
+            return
 
-        self.progress_signal.emit(f"Using features from: {os.path.basename(images_file)}")
+        # Randomly select a CSV file
+        selected_csv = random.choice(csv_files)
+        csv_path = os.path.join(features_dir, selected_csv)
+        self.progress_signal.emit(f"Using features from: {selected_csv}")
 
         try:
             # Load the CSV file
-            df = pd.read_csv(images_file)
+            df = pd.read_csv(csv_path)
 
             if df.empty:
                 self.progress_signal.emit("Selected CSV file is empty!")
@@ -403,12 +465,12 @@ class FeatureVisualizationThread(QThread):
 class ModernUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.charts_enabled = True
+        self.charts_enabled = False  # Set to False by default
         self.selected_folder = None
         self.processing_thread = None
         self.training_thread = None
         self.visualization_thread = None
-        self.charts_loading_thread = None  # Add this line
+        self.charts_loading_thread = None
         self.init_ui()
 
     def init_ui(self):
@@ -621,12 +683,6 @@ class ModernUI(QMainWindow):
         self.process_button.clicked.connect(self.process_images)
         buttons_layout.addWidget(self.process_button)
 
-        toggle_style = button_style.replace("#0078d4", "#444444")
-        self.charts_button = QPushButton("Toggle Charts: ON")
-        self.charts_button.setStyleSheet(toggle_style)
-        self.charts_button.clicked.connect(self.toggle_charts)
-        buttons_layout.addWidget(self.charts_button)
-
         layout.addWidget(buttons_frame)
         layout.addStretch()
 
@@ -825,6 +881,29 @@ class ModernUI(QMainWindow):
         self.viz_button.clicked.connect(self.visualize_random_feature)
         viz_status_layout.addWidget(self.viz_button)
 
+        # Add download buttons
+        download_frame = QFrame()
+        download_frame.setStyleSheet("""
+            QFrame {
+                background: #333333;
+                border-radius: 10px;
+                padding: 20px;
+                margin-top: 20px;
+            }
+        """)
+        download_layout = QHBoxLayout(download_frame)
+
+        self.download_astrocyte_button = QPushButton("Download Astrocyte Features")
+        self.download_astrocyte_button.setStyleSheet(button_style)
+        self.download_astrocyte_button.clicked.connect(lambda: self.download_features("extracted_features"))
+        download_layout.addWidget(self.download_astrocyte_button)
+
+        self.download_whole_image_button = QPushButton("Download Whole Image Features")
+        self.download_whole_image_button.setStyleSheet(button_style)
+        self.download_whole_image_button.clicked.connect(lambda: self.download_features("whole_image_features"))
+        download_layout.addWidget(self.download_whole_image_button)
+
+        viz_status_layout.addWidget(download_frame)
         layout.addWidget(viz_status_frame)
 
         # Create a scroll area for visualization
@@ -906,8 +985,6 @@ class ModernUI(QMainWindow):
             ("Area:", "area_value"),
             ("Perimeter:", "perimeter_value"),
             ("Circularity:", "circularity_value"),
-            ("Roundness:", "roundness_value"),
-            ("Number of Branches:", "branches_value"),
             ("Number of Projections:", "projections_value"),
             ("Total Skeleton Length:", "skeleton_length_value"),
             ("Fractal Dimension:", "fractal_dim_value")
@@ -937,9 +1014,28 @@ class ModernUI(QMainWindow):
         viz_scroll_area.setWidget(self.viz_display_frame)
         layout.addWidget(viz_scroll_area)
 
-    def toggle_charts(self):
-        self.charts_enabled = not self.charts_enabled
-        self.charts_button.setText(f"Toggle Charts: {'ON' if self.charts_enabled else 'OFF'}")
+    def download_features(self, feature_type):
+        """Download feature CSV files"""
+        if not os.path.exists(feature_type):
+            self.viz_status_label.setText(f"No {feature_type} directory found!")
+            return
+
+        # Get save location from user
+        save_dir = QFileDialog.getExistingDirectory(self, f"Select Directory to Save {feature_type}")
+        if not save_dir:
+            return
+
+        try:
+            # Copy all CSV files from the feature directory
+            for file in os.listdir(feature_type):
+                if file.endswith('.csv'):
+                    src_path = os.path.join(feature_type, file)
+                    dst_path = os.path.join(save_dir, file)
+                    shutil.copy2(src_path, dst_path)
+            
+            self.viz_status_label.setText(f"Successfully downloaded {feature_type} to {save_dir}")
+        except Exception as e:
+            self.viz_status_label.setText(f"Error downloading features: {str(e)}")
 
     def visualize_random_feature(self):
         """Selects a random feature from the extracted features and displays it"""
@@ -1054,8 +1150,6 @@ class ModernUI(QMainWindow):
         self.stat_value_labels['area_value'].setText(str(stats['area']))
         self.stat_value_labels['perimeter_value'].setText(str(stats['perimeter']))
         self.stat_value_labels['circularity_value'].setText(str(stats['circularity']))
-        self.stat_value_labels['roundness_value'].setText(str(stats['roundness']))
-        self.stat_value_labels['branches_value'].setText(str(stats['num_branches']))
         self.stat_value_labels['projections_value'].setText(str(stats['num_projections']))
         self.stat_value_labels['skeleton_length_value'].setText(str(stats['total_skeleton_length']))
         self.stat_value_labels['fractal_dim_value'].setText(str(stats['fractal_dim']))
@@ -1092,19 +1186,25 @@ class ModernUI(QMainWindow):
         if self.selected_folder:
             self.status_label.setText("Processing images...")
             self.progress_bar.show()
-            self.progress_bar.setRange(0, 0)  # Infinite progress bar
+            self.progress_bar.setRange(0, 100)  # Set range to 0-100 for percentage
+            self.progress_bar.setValue(0)  # Initialize to 0%
 
             self.processing_thread = ImageProcessingThread(
                 self.selected_folder,
                 self.charts_enabled
             )
             self.processing_thread.progress_signal.connect(self.update_status)
+            self.processing_thread.progress_value_signal.connect(self.update_progress_bar)
             self.processing_thread.finished.connect(self.processing_complete)
             self.processing_thread.start()
 
+    def update_progress_bar(self, value):
+        """Update the progress bar value"""
+        self.progress_bar.setValue(value)
+
     def processing_complete(self):
-        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
+        self.status_label.setText("Processing Complete!")
 
     def update_status(self, message):
         self.status_label.setText(message)

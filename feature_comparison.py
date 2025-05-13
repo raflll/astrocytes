@@ -8,20 +8,52 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 import numpy as np
 import shap
 from statsmodels.stats.outliers_influence import variance_inflation_factor
+import os
 
-def load_data(file_paths):
-    dataframes = {key: pd.read_csv(path) for key, path in file_paths.items()}
-    dataframes["treatment_1"]["label"] = 1
-    dataframes["treatment_2"]["label"] = 2
-    dataframes["control"]["label"] = 0
-    df = pd.concat(dataframes.values(), ignore_index=True)
-    df = df[df["file_name"].str.contains("-ch2")]
-    # df = df[df["num_projections"] != 0] # optional, filtering out no projections
-    return df
+def load_data():
+    """
+    Load data from CSV files in the extracted_features directory.
+    Returns a dictionary of dataframes and their labels.
+    """
+    dataframes = {}
+    
+    # Find all feature CSV files in the extracted_features directory
+    features_dir = "extracted_features"
+    if not os.path.exists(features_dir):
+        print(f"Warning: {features_dir} directory does not exist!")
+        return None
+
+    # Get all CSV files in the directory
+    csv_files = [f for f in os.listdir(features_dir) if f.endswith('_features.csv')]
+    if not csv_files:
+        print("No feature CSV files found!")
+        return None
+
+    # Load each CSV file and assign labels
+    for i, csv_file in enumerate(csv_files):
+        csv_path = os.path.join(features_dir, csv_file)
+        try:
+            df = pd.read_csv(csv_path)
+            # Extract folder name from CSV filename (remove '_features.csv')
+            folder_name = csv_file[:-13]  # Remove '_features.csv'
+            dataframes[folder_name] = df
+            dataframes[folder_name]["label"] = i
+        except Exception as e:
+            print(f"Error loading {csv_path}: {e}")
+            continue
+
+    return dataframes
 
 def preprocess_data(df):
     # First, remove non-numeric columns and save label column
     X = df.drop(columns=["file_name", "object_label", "label"])
+
+    # Drop branch-related features and roundness
+    columns_to_drop = [
+        'branch_lengths', 'num_branches', 'total_branch_length',
+        'avg_branch_length', 'branch_density', 'roundness'
+    ]
+    X = X.drop(columns=[col for col in columns_to_drop if col in X.columns])
 
     # Handle list columns by converting them to string length (if they exist)
     for col in X.columns:
@@ -148,13 +180,15 @@ def compute_vif(X):
     return vif_data
 
 def train_model(model_name, visuals):
-    file_paths = {
-        "treatment_1": "extracted_features/Phenotype 1_features.csv",
-        "treatment_2": "extracted_features/Phenotype 2_features.csv",
-        "control": "extracted_features/Control_features.csv"
-    }
+    dataframes = load_data()
 
-    df = load_data(file_paths)
+    if dataframes is None:
+        print("Dataframes not loaded properly. Exiting train_model.")
+        return
+
+    df = pd.concat(dataframes.values(), ignore_index=True)
+    df = df[df["file_name"].str.contains("-ch2")]
+    # df = df[df["num_projections"] != 0] # optional, filtering out no projections
 
     X, y, X_train, X_test, y_train, y_test, feature_names = preprocess_data(df)
 

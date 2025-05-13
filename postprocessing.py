@@ -114,153 +114,57 @@ def save_features_to_csv(subfolder_features):
             df.to_csv(csv_filename, index=False)
             print(f"Saved features for {subfolder} to {csv_filename}")
 
-def get_features(image_path):
-    """
-    Calculate aggregate features for the given image by reading from CSV files.
-
-    Parameters:
-    image_path (str): The image filename to look for in the CSV files
-
-    Returns:
-    dict: Calculated feature averages for the image
-    """
-    # CSV file paths
-    csv_files = {
-        "Phenotype 1": "extracted_features/Phenotype 1_features.csv",
-        "Phenotype 2": "extracted_features/Phenotype 2_features.csv",
-        "Control": "extracted_features/Control_features.csv",
-        "Images": "extracted_features/Images_features.csv"
-    }
-
-    # Search for the image in all CSV files
-    astrocyte_features = []
-
-    for csv_name, csv_path in csv_files.items():
-        if os.path.exists(csv_path):
-            try:
-                df = pd.read_csv(csv_path)
-                # Filter rows that match the image filename
-                image_data = df[df['file_name'] == image_path]
-
-                if not image_data.empty:
-                    # Convert each row to a dictionary for processing
-                    for _, row in image_data.iterrows():
-                        # Convert branch_lengths and projection_lengths from string to list if they exist
-                        feature_dict = row.to_dict()
-
-                        # Convert string representations of lists to actual lists
-                        for list_col in ['branch_lengths', 'projection_lengths']:
-                            if list_col in feature_dict and isinstance(feature_dict[list_col], str):
-                                try:
-                                    # Handle list format (ex: "[1.2, 3.4, 5.6]")
-                                    feature_dict[list_col] = eval(feature_dict[list_col])
-                                except:
-                                    # If eval fails, provide an empty list
-                                    feature_dict[list_col] = []
-
-                        astrocyte_features.append(feature_dict)
-
-                    break  # Found the image, no need to check other CSV files
-
-            except Exception as e:
-                print(f"Error reading {csv_path}: {e}")
-
-    if not astrocyte_features:
-        return None
-
-    # Calculate aggregate statistics
-    Totals = {
-        "num_branches": 0,
-        "branch_lengths": 0,
-        "total_skeleton_length": 0,
-        "most_branches": 0,
-        "analyzed": 0,
-        "perimeter": 0,
-        "roundness": 0,
-        "average_area": 0,
-        "largest_area": 0,
-        "average_perimeter": 0,
-        "largest_perimeter": 0,
-        "circularity": 0,
-        "roundness_variance": 0,
-        "fractal_dim": 0,
-        "num_projections": 0,
-        "num_neighbors": 0,
-        "proj_length": 0,
-        "most_neighbors": 0,
-        "most_projections": 0
-    }
-
-    for f in astrocyte_features:  # Iterate through features for each astrocyte
-        Totals["num_branches"] += f.get("num_branches", 0)
-
-        # Handle branch_lengths (could be a list or not exist)
-        if "branch_lengths" in f and isinstance(f["branch_lengths"], list):
-            Totals["branch_lengths"] += sum(f["branch_lengths"])
-
-        Totals["total_skeleton_length"] += f.get("total_skeleton_length", 0)
-        Totals["most_branches"] = max(Totals["most_branches"], f.get("num_branches", 0))
-        Totals["analyzed"] += 1
-        Totals["perimeter"] += f.get("perimeter", 0)
-        Totals["roundness"] += f.get("roundness", 0)
-        Totals["average_area"] += f.get("area", 0)
-        Totals["largest_area"] = max(Totals["largest_area"], f.get("area", 0))
-        Totals["average_perimeter"] += f.get("perimeter", 0)
-        Totals["largest_perimeter"] = max(Totals["largest_perimeter"], f.get("perimeter", 0))
-        Totals["circularity"] += f.get("circularity", 0)
-        Totals["fractal_dim"] += f.get("fractal_dim", 0)
-        Totals["num_projections"] += f.get("num_projections", 0)
-
-        # Handle projection_lengths (could be a list or not exist)
-        if "projection_lengths" in f and isinstance(f["projection_lengths"], list):
-            Totals["proj_length"] += sum(f["projection_lengths"])
-
-        Totals["num_neighbors"] += f.get("neighbors", 0)
-        Totals["most_neighbors"] = max(Totals["most_neighbors"], f.get("neighbors", 0))
-        Totals["most_projections"] = max(Totals["most_projections"], f.get("num_projections", 0))
-
-    # Calculate averages (avoid division by zero)
-    bl = Totals["branch_lengths"] / Totals["num_branches"] if Totals["num_branches"] > 0 else 0
-    sl = Totals["total_skeleton_length"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    ar = Totals["roundness"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    aa = Totals["average_area"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    ap = Totals["average_perimeter"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    bd = (Totals["num_branches"] / Totals["analyzed"] / sl) if (Totals["analyzed"] > 0 and sl > 0) else 0
-    ab = Totals["num_branches"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    ac = Totals["circularity"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    anp = Totals["num_projections"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    afd = Totals["fractal_dim"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    nn = Totals["num_neighbors"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-    pl = Totals["proj_length"] / Totals["analyzed"] if Totals["analyzed"] > 0 else 0
-
-    # Calculate roundness variance
-    for f in astrocyte_features:
-        Totals["roundness_variance"] += (f.get("roundness", 0) - ar)**2
-
-    rv = Totals["roundness_variance"] / (Totals["analyzed"] - 1) if Totals["analyzed"] > 1 else 0
-
-    Averages = {
-        "num_branches": f"{bl:.3f}",
-        "branch_lengths": f"{bl:.3f}",
-        "skeleton_length": f"{sl:.3f}",
-        "most_branches": Totals["most_branches"],
-        "analyzed": Totals["analyzed"],
-        "average_roundness": f"{ar:.3f}",
-        "average_area" : f"{aa:.3f}",
-        "a_ratio" : f"{aa / Totals['largest_area']:.3f}" if Totals['largest_area'] > 0 else "0.000",
-        "average_perimeter" : f"{ap:.3f}",
-        "largest_perimeter" : Totals["largest_perimeter"],
-        "thickness" : f"{aa / sl:.3f}" if sl > 0 else "0.000",
-        "branch_density" : f"{bd:.3f}",
-        "average_branches" : f"{ab:.3f}",
-        "average_circularity" : f"{ac:.3f}",
-        "roundness_variance" : f"{rv:.3f}",
-        "average_fractal_dim" : f"{afd:.3f}",
-        "average_num_projections" : f"{anp:.3f}",
-        "num_neighbors" : f"{nn:.3f}",
-        "proj_length": f"{pl:.3f}",
-        "most_neighbors": Totals["most_neighbors"],
-        "most_projections": Totals["most_projections"]
-    }
-
-    return Averages
+def get_features(image_name):
+    """Get features for a specific image from all CSV files"""
+    features = {}
+    
+    # Check if extracted_features directory exists
+    if not os.path.exists('extracted_features'):
+        print("Warning: extracted_features directory not found!")
+        return features
+    
+    # Get all CSV files in the extracted_features directory
+    csv_files = [f for f in os.listdir('extracted_features') if f.endswith('_features.csv')]
+    
+    for csv_file in csv_files:
+        try:
+            df = pd.read_csv(os.path.join('extracted_features', csv_file))
+            
+            # Find the row with matching image name
+            matching_rows = df[df['file_name'] == image_name]
+            
+            if not matching_rows.empty:
+                # Get the first matching row
+                row = matching_rows.iloc[0]
+                
+                # Convert string representations of lists to actual lists
+                for col in ['projection_lengths']:
+                    if col in row and isinstance(row[col], str):
+                        try:
+                            row[col] = eval(row[col])
+                        except:
+                            row[col] = []
+                
+                # Store features
+                features = {
+                    'file_name': row['file_name'],
+                    'object_label': row['object_label'],
+                    'area': row['area'],
+                    'perimeter': row['perimeter'],
+                    'circularity': row['circularity'],
+                    'num_projections': row['num_projections'],
+                    'total_skeleton_length': row['total_skeleton_length'],
+                    'fractal_dim': row['fractal_dim'],
+                    'projection_lengths': row['projection_lengths'],
+                    'avg_projection_length': row['avg_projection_length'],
+                    'max_projection_length': row['max_projection_length'],
+                    'neighbors': row['neighbors'],
+                    'length_width_ratio': row['length_width_ratio']
+                }
+                break
+                
+        except Exception as e:
+            print(f"Error reading {csv_file}: {str(e)}")
+            continue
+    
+    return features

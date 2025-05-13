@@ -23,60 +23,55 @@ def charts(visuals=False):
         str: Path to the directory where charts are saved.
     """
     try:
-        # Load the data from the CSV files
-        file_paths = {
-            "Control": "whole_image_features/Control_features.csv",
-            "Phenotype_1": "whole_image_features/Phenotype 1_features.csv",
-            "Phenotype_2": "whole_image_features/Phenotype 2_features.csv",
-            "Images": "whole_image_features/Images_features.csv"
-        }
-
         # Create the 'charts' directory if it does not exist
         charts_dir = "charts"
         os.makedirs(charts_dir, exist_ok=True)
 
-        # Check if all files exist
-        valid_paths = {}
-        for name, path in file_paths.items():
-            if os.path.exists(path):
-                valid_paths[name] = path
-            else:
-                print(f"Warning: {path} does not exist. Skipping...")
-
-        # If no files exist, return early
-        if not valid_paths:
-            print("No CSV files found. Exiting...")
+        # Find all feature CSV files in the extracted_features directory
+        features_dir = "extracted_features"
+        if not os.path.exists(features_dir):
+            print(f"Warning: {features_dir} directory does not exist. Exiting...")
             return charts_dir
+
+        # Get all CSV files in the directory
+        csv_files = [f for f in os.listdir(features_dir) if f.endswith('_features.csv')]
+        if not csv_files:
+            print("No feature CSV files found. Exiting...")
+            return charts_dir
+
+        # Create a dictionary mapping folder names to their CSV paths
+        file_paths = {}
+        for csv_file in csv_files:
+            # Extract folder name from CSV filename (remove '_features.csv')
+            folder_name = csv_file[:-13]  # Remove '_features.csv'
+            # Standardize folder name by replacing spaces with underscores
+            folder_name = folder_name.replace(' ', '_')
+            file_paths[folder_name] = os.path.join(features_dir, csv_file)
 
         # Read the CSV files
         dataframes = {}
-        for name, path in valid_paths.items():
+        for name, path in file_paths.items():
             try:
                 df = pd.read_csv(path)
 
-                # Process branch_lengths and projection_lengths columns
-                if 'branch_lengths' in df.columns:
-                    # Convert string representation of lists to actual lists
-                    df['branch_lengths'] = df['branch_lengths'].apply(lambda x: eval(x) if isinstance(x, str) else x)
-                    # Calculate mean of each list
-                    df['branch_lengths_mean'] = df['branch_lengths'].apply(lambda x: np.mean(x) if isinstance(x, list) and len(x) > 0 else 0)
+                # Drop branch-related features and roundness
+                columns_to_drop = [
+                    'branch_lengths', 'num_branches', 'total_branch_length',
+                    'avg_branch_length', 'branch_density', 'roundness'
+                ]
+                df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
 
+                # Process projection_lengths column
                 if 'projection_lengths' in df.columns:
                     # Convert string representation of lists to actual lists
                     df['projection_lengths'] = df['projection_lengths'].apply(lambda x: eval(x) if isinstance(x, str) else x)
                     # Calculate mean of each list
                     df['projection_lengths_mean'] = df['projection_lengths'].apply(lambda x: np.mean(x) if isinstance(x, list) and len(x) > 0 else 0)
+                    # Drop the original projection_lengths column
+                    df = df.drop(columns=['projection_lengths'])
 
                 # Drop non-numeric columns that aren't needed for analysis
                 columns_to_drop = ['file_name', 'object_label']
-
-                # Also drop original branch_lengths and projection_lengths as they're now represented as mean values
-                if 'branch_lengths' in df.columns:
-                    columns_to_drop.append('branch_lengths')
-                if 'projection_lengths' in df.columns:
-                    columns_to_drop.append('projection_lengths')
-
-                # Drop columns that exist
                 df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
 
                 # Store the processed dataframe

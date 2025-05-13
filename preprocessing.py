@@ -15,8 +15,41 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pandas as pd
 from skimage.morphology import (remove_small_objects, remove_small_holes, skeletonize)
+import shutil
 
-def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
+def cleanup_old_files():
+    """
+    Clean up old files from previous runs by removing contents of output directories
+    and old CSV files.
+    """
+    # Directories to clean
+    dirs_to_clean = [
+        "binarized_images",
+        "skeletonized_images",
+        "extracted_features",
+        "whole_image_features",
+        "charts"
+    ]
+    
+    # Clean each directory
+    for dir_path in dirs_to_clean:
+        if os.path.exists(dir_path):
+            print(f"Cleaning {dir_path}...")
+            # Remove all contents but keep the directory
+            for item in os.listdir(dir_path):
+                item_path = os.path.join(dir_path, item)
+                try:
+                    if os.path.isfile(item_path):
+                        os.unlink(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                except Exception as e:
+                    print(f"Error cleaning {item_path}: {e}")
+
+def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}, progress_callback=None):
+    # Clean up old files before starting
+    cleanup_old_files()
+    
     # Convert input path to Path object
     input_path = Path(input_path)
 
@@ -28,8 +61,6 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
     # Create output directories if they don't exist
     binarized_base = Path("binarized_images")
     skeleton_base = Path("skeletonized_images")
-
-    # Also create directory for extracted features
     features_dir = Path("extracted_features")
 
     binarized_base.mkdir(exist_ok=True)
@@ -65,7 +96,7 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
 
                     subdir_paths.append((file_path, dapi_path, binarized_dir, skeleton_dir))
             if subdir_paths:  # Only add if there are actually images
-                image_paths.append(subdir_paths)
+                image_paths.append((subdir.name, subdir_paths))
     else:
         # Process files in main directory only
         print("No subdirectories found. Processing files in main directory...")
@@ -82,59 +113,68 @@ def process_directory(input_path, image_extensions={".tiff", ".tif", ".png"}):
 
                 main_dir_paths.append((file_path, dapi_path, binarized_dir, skeleton_dir))
         if main_dir_paths:  # Only add if there are actually images
-            image_paths.append(main_dir_paths)
+            image_paths.append((input_path.name, main_dir_paths))
 
     if not image_paths:
         print(f"No images found with extensions {image_extensions}")
         return None
 
     num_folders = len(image_paths)
-    total_images = sum(len(folder) for folder in image_paths)
+    total_images = sum(len(folder[1]) for folder in image_paths)
     print(f"Found {total_images} images in {num_folders} folders to process")
 
     all_features = []
+    processed_images = 0
     # Process each folder
-    for folder_idx, folder_paths in enumerate(image_paths):
-        print(f"Processing folder {folder_idx+1}/{num_folders} with {len(folder_paths)} images")
+    for folder_idx, (folder_name, folder_paths) in enumerate(image_paths):
+        print(f"Processing folder {folder_idx+1}/{num_folders} ({folder_name}) with {len(folder_paths)} images")
         folder_features = {}
 
         # Process images in parallel within each folder
         with ThreadPoolExecutor() as executor:
-            results = list(executor.map(lambda args: process_image(*args), folder_paths))
+            futures = []
+            for file_path, dapi_path, binarized_dir, skeleton_dir in folder_paths:
+                future = executor.submit(process_image, file_path, dapi_path, binarized_dir, skeleton_dir)
+                future.add_done_callback(lambda f: update_progress(f, processed_images, total_images, progress_callback))
+                futures.append(future)
+            
+            # Wait for all futures to complete
+            for future in futures:
+                result = future.result()
+                file_name, features = result
+                folder_features[file_name] = features
+                processed_images += 1
 
-        # Collect results for this folder
-        for result in results:
-            file_name, features = result
-            folder_features[file_name] = features
-
-        all_features.append(folder_features)
+        all_features.append((folder_name, folder_features))
 
     # Save features to CSV files
-    for f, folder in enumerate(all_features):
-        if f == 0:
-            name = "extracted_features/Phenotype 1_features.csv"
-        elif f == 1:
-            name = "extracted_features/Images_features.csv"
-        elif f == 2:
-            name = "extracted_features/Phenotype 2_features.csv"
-        elif f == 3:
-            name = "extracted_features/Control_features.csv"
-        else:
-            name = f"extracted_features/Folder_{f+1}_features.csv"
+    for folder_name, folder_features in all_features:
+        # Create CSV filename based on folder name
+        csv_name = f"extracted_features/{folder_name}_features.csv"
 
         # Convert nested dictionaries to DataFrame
         rows = []
-        for file_name, cell_features_list in folder.items():
+        for file_name, cell_features_list in folder_features.items():
             for i, cell_feature in enumerate(cell_features_list):
                 cell_feature['file_name'] = file_name
                 rows.append(cell_feature)
 
         if rows:  # Only save if we have data
             df = pd.DataFrame(rows)
-            save_dataframe(df, name)
-            print(f"Saved features to {name}")
+            save_dataframe(df, csv_name)
+            print(f"Saved features to {csv_name}")
         else:
-            print(f"No features to save for folder {f}")
+            print(f"No features to save for folder {folder_name}")
+
+def update_progress(future, processed_images, total_images, progress_callback):
+    """Update progress when an image is processed"""
+    try:
+        future.result()  # Get the result (this will raise any exceptions)
+        if progress_callback:
+            progress = int((processed_images / total_images) * 85)  # Binarization is 85% of total progress
+            progress_callback(progress)
+    except Exception as e:
+        print(f"Error processing image: {str(e)}")
 
 def process_image(file_path, dapi_path, binarized_dir, skeleton_dir):
     # Make strings from the combined paths
@@ -497,7 +537,6 @@ def process_astrocyte(label, labels, pruned_complete_skeleton, binarized_img):
         dilated_mask = cv2.dilate(astrocyte_mask, kernel, iterations=1)
         neighbors = np.unique(labels[dilated_mask > 0])
         neighbors = neighbors[(neighbors != label) & (neighbors != 0)]  # removing current component and 0 (background)
-        # print(f"Neighbors after exclusion: {neighbors}")
         num_neighbors = len(neighbors)
 
         # LENGTH/WIDTH RATIO feature
@@ -522,13 +561,6 @@ def process_astrocyte(label, labels, pruned_complete_skeleton, binarized_img):
             print(f"Warning: Error calculating fractal dimension for label {label}: {str(e)}")
             fractal_dim = 0
 
-        # Nikhita's NEIGHBORS feature
-        kernel = np.ones((70, 70), np.uint8) # need to determine the area to consider for neighbors
-        dilated_mask = cv2.dilate(astrocyte_mask, kernel, iterations=1)
-        neighbors = np.unique(labels[dilated_mask > 0])
-        neighbors = neighbors[(neighbors != label) & (neighbors != 0)]  # removing current component and 0 (background)
-        num_neighbors = len(neighbors)
-
         component_skeleton = (component_skeleton > 0).astype(np.uint8)
         try:
             if np.sum(component_skeleton) == 0:
@@ -543,27 +575,9 @@ def process_astrocyte(label, labels, pruned_complete_skeleton, binarized_img):
             skeleton_data = None
 
         # Safety checks for skeleton_data
-        num_nodes = 0
-        num_branches = 0
-        branch_lengths = []
         total_skeleton_length = 0
 
         if skeleton_data is not None:
-            try:
-                num_nodes = skeleton_data["node-id-src"].nunique() + skeleton_data["node-id-dst"].nunique()
-            except Exception as e:
-                print(f"Warning: Error calculating num_nodes for label {label}: {str(e)}")
-
-            try:
-                num_branches = len(skeleton_data) if hasattr(skeleton_data, '__len__') else 0
-            except Exception as e:
-                print(f"Warning: Error calculating num_branches for label {label}: {str(e)}")
-
-            try:
-                branch_lengths = skeleton_data['branch-distance'].tolist() if (hasattr(skeleton_data, '__len__') and len(skeleton_data) > 0 and 'branch-distance' in skeleton_data) else []
-            except Exception as e:
-                print(f"Warning: Error calculating branch_lengths for label {label}: {str(e)}")
-
             try:
                 total_skeleton_length = sum(skeleton_data['branch-distance']) if (hasattr(skeleton_data, '__len__') and len(skeleton_data) > 0 and 'branch-distance' in skeleton_data) else 0
             except Exception as e:
@@ -572,22 +586,17 @@ def process_astrocyte(label, labels, pruned_complete_skeleton, binarized_img):
         # Collect features for this astrocyte with robust error checking
         features = {
             "object_label": label,
-            'num_nodes': num_nodes,
-            "num_branches": num_branches,
             "num_projections": num_projs2,
-            "branch_lengths": branch_lengths,
             "total_skeleton_length": total_skeleton_length,
             "area": area,
             "fractal_dim": fractal_dim,
             "perimeter": perimeter,
             "circularity": (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0,
-            "roundness": perimeter**2 / (4 * math.pi * np.sum(astrocyte_mask > 0)) if np.sum(astrocyte_mask > 0) > 0 else 0,
             "projection_lengths": proj_lengths if isinstance(proj_lengths, list) else [],
             "avg_projection_length": sum(proj_lengths) / len(proj_lengths) if isinstance(proj_lengths, list) and len(proj_lengths) > 0 else 0,
             "max_projection_length": max_proj_length,
             "neighbors": num_neighbors,
-            "length_width_ratio": length_width_ratio,
-            # "mask": astrocyte_mask
+            "length_width_ratio": length_width_ratio
         }
 
         # Return both features and the pruned skeleton
